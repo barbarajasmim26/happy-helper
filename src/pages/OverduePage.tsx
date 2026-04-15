@@ -1,8 +1,8 @@
 import { useTenants, useAllPayments, useUpsertPayment } from "@/hooks/use-tenants";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, MessageCircle, Check, Eye } from "lucide-react";
+import { AlertTriangle, MessageCircle, Check, Eye, TrendingUp, TrendingDown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { openWhatsApp, getMessageTemplates } from "@/lib/whatsapp";
@@ -15,6 +15,22 @@ export default function OverduePage() {
   const { data: allPayments } = useAllPayments(year);
   const upsertPayment = useUpsertPayment();
   const navigate = useNavigate();
+
+  // Determine payment pattern: check last 6 months
+  const getPaymentPattern = (tenantId: string) => {
+    const recentPayments: boolean[] = [];
+    for (let m = month - 1; m >= Math.max(1, month - 6); m--) {
+      const p = allPayments?.find((p) => p.tenant_id === tenantId && p.month === m);
+      recentPayments.push(p?.status === "paid");
+    }
+    const paidCount = recentPayments.filter(Boolean).length;
+    const total = recentPayments.length;
+    if (total === 0) return { label: "Novo", color: "secondary" as const, icon: null };
+    const ratio = paidCount / total;
+    if (ratio >= 0.8) return { label: "Paga e Mora", color: "warning" as const, icon: TrendingUp, description: "Costuma pagar, atraso pontual" };
+    if (ratio <= 0.3) return { label: "Mora e Paga", color: "destructive" as const, icon: TrendingDown, description: "Atrasos frequentes" };
+    return { label: "Irregular", color: "secondary" as const, icon: AlertTriangle, description: "Pagamento instável" };
+  };
 
   const overdue = tenants?.filter((t) => {
     const payment = allPayments?.find((p) => p.tenant_id === t.id && p.month === month);
@@ -58,9 +74,24 @@ export default function OverduePage() {
       <h1 className="text-2xl font-bold">Inquilinos em Atraso</h1>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground">Inadimplentes</p><p className="text-2xl font-bold text-destructive">{overdue.length}</p></CardContent></Card>
-        <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground">Receita Pendente</p><p className="text-2xl font-bold text-warning">R$ {pendingRevenue.toFixed(2)}</p></CardContent></Card>
-        <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground">Mês Referência</p><p className="text-2xl font-bold">{MONTHS_PT[month - 1]}/{year}</p></CardContent></Card>
+        <Card className="border-l-4 border-l-destructive">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Inadimplentes</p>
+            <p className="text-2xl font-bold text-destructive">{overdue.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-warning">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Receita Pendente</p>
+            <p className="text-2xl font-bold text-warning">R$ {pendingRevenue.toFixed(2)}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-primary">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Mês Referência</p>
+            <p className="text-2xl font-bold">{MONTHS_PT[month - 1]}/{year}</p>
+          </CardContent>
+        </Card>
       </div>
 
       {!overdue.length ? (
@@ -69,24 +100,41 @@ export default function OverduePage() {
         <div className="space-y-3">
           {overdue.map((t) => {
             const { fee, interest, total } = calcFees(Number(t.rent_amount));
+            const pattern = getPaymentPattern(t.id);
+            const PatternIcon = pattern.icon;
             return (
-              <Card key={t.id}>
+              <Card key={t.id} className="hover:shadow-md transition-shadow">
                 <CardContent className="pt-4">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                    <div>
-                      <p className="font-semibold">{t.name}</p>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold">{t.name}</p>
+                        <Badge variant={pattern.color === "warning" ? "outline" : pattern.color} className={`text-[10px] flex items-center gap-1 ${pattern.color === "warning" ? "bg-warning/10 text-warning border-warning/30" : ""}`}>
+                          {PatternIcon && <PatternIcon className="h-3 w-3" />}
+                          {pattern.label}
+                        </Badge>
+                      </div>
                       <p className="text-xs text-muted-foreground">{t.property?.address} - Casa {t.house_number}</p>
-                      <div className="flex gap-3 mt-1 text-xs">
-                        <span>Original: R$ {Number(t.rent_amount).toFixed(2)}</span>
-                        <span>Multa (2%): R$ {fee.toFixed(2)}</span>
-                        <span>Juros (1%): R$ {interest.toFixed(2)}</span>
+                      {pattern.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5 italic">{pattern.description}</p>
+                      )}
+                      <div className="flex gap-3 mt-2 text-xs flex-wrap">
+                        <span className="px-2 py-0.5 rounded bg-muted">Original: R$ {Number(t.rent_amount).toFixed(2)}</span>
+                        <span className="px-2 py-0.5 rounded bg-destructive/10 text-destructive">Multa (2%): R$ {fee.toFixed(2)}</span>
+                        <span className="px-2 py-0.5 rounded bg-destructive/10 text-destructive">Juros (1%): R$ {interest.toFixed(2)}</span>
                         <Badge variant="destructive">Total: R$ {total.toFixed(2)}</Badge>
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={() => markPaid(t.id, total)}><Check className="mr-1 h-3 w-3" />Pago</Button>
-                      <Button size="sm" variant="outline" onClick={() => sendOverdueWhatsApp(t)}><MessageCircle className="mr-1 h-3 w-3" />Cobrar</Button>
-                      <Button size="sm" variant="ghost" onClick={() => navigate(`/tenants/${t.id}`)}><Eye className="h-3 w-3" /></Button>
+                      <Button size="sm" className="bg-success hover:bg-success/90 text-success-foreground" onClick={() => markPaid(t.id, total)}>
+                        <Check className="mr-1 h-3 w-3" />Pago
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => sendOverdueWhatsApp(t)}>
+                        <MessageCircle className="mr-1 h-3 w-3" />Cobrar
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => navigate(`/tenants/${t.id}`)}>
+                        <Eye className="h-3 w-3" />
+                      </Button>
                     </div>
                   </div>
                 </CardContent>

@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useTenant, usePayments, useUpdateTenant, useUpsertPayment } from "@/hooks/use-tenants";
+import { useTenant, usePayments, useUpdateTenant, useUpsertPayment, useProperties } from "@/hooks/use-tenants";
+import { useDocuments } from "@/hooks/use-documents";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { ArrowLeft, Edit, MessageCircle, Receipt, UserX, Upload } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ArrowLeft, Edit, MessageCircle, Receipt, UserX, Upload, FileText, ExternalLink, Phone } from "lucide-react";
 import { toast } from "sonner";
 import { openWhatsApp, getMessageTemplates } from "@/lib/whatsapp";
 import { generateReceipt } from "@/lib/receipt-generator";
@@ -19,6 +21,8 @@ export default function TenantProfilePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: tenant, isLoading } = useTenant(id!);
+  const { data: properties } = useProperties();
+  const { data: documents, refetch: refetchDocs } = useDocuments(id);
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
   const { data: payments } = usePayments(id, year);
@@ -52,6 +56,7 @@ export default function TenantProfilePage() {
       name: tenant.name, phone: tenant.phone || "", house_number: tenant.house_number || "",
       rent_amount: tenant.rent_amount, deposit: tenant.deposit || "", payment_day: tenant.payment_day || 10,
       entry_date: tenant.entry_date || "", exit_date: tenant.exit_date || "", cpf: tenant.cpf || "",
+      property_id: tenant.property_id || "",
     });
     setEditOpen(true);
   };
@@ -63,10 +68,18 @@ export default function TenantProfilePage() {
         house_number: editForm.house_number || null, rent_amount: parseFloat(editForm.rent_amount),
         deposit: editForm.deposit ? parseFloat(editForm.deposit) : null,
         payment_day: parseInt(editForm.payment_day) || 10,
-        entry_date: editForm.entry_date || null, exit_date: editForm.exit_date || null, cpf: editForm.cpf || null,
+        entry_date: editForm.entry_date || null, exit_date: editForm.exit_date || null,
+        cpf: editForm.cpf || null, property_id: editForm.property_id || null,
       });
       toast.success("Salvo!");
       setEditOpen(false);
+
+      // Open WhatsApp Web if phone was saved
+      if (editForm.phone) {
+        const cleanPhone = editForm.phone.replace(/\D/g, "");
+        const fullPhone = cleanPhone.startsWith("55") ? cleanPhone : `55${cleanPhone}`;
+        window.open(`https://web.whatsapp.com/send?phone=${fullPhone}`, "_blank");
+      }
     } catch (e: any) { toast.error(e.message); }
   };
 
@@ -90,6 +103,13 @@ export default function TenantProfilePage() {
     openWhatsApp({ phone: tenant.phone, message: templates.reminder });
   };
 
+  const openWhatsAppDirect = () => {
+    if (!tenant.phone) { toast.error("Telefone não cadastrado."); return; }
+    const cleanPhone = tenant.phone.replace(/\D/g, "");
+    const fullPhone = cleanPhone.startsWith("55") ? cleanPhone : `55${cleanPhone}`;
+    window.open(`https://web.whatsapp.com/send?phone=${fullPhone}`, "_blank");
+  };
+
   const handleReceipt = async (month: number) => {
     const doc = await generateReceipt({
       tenantName: tenant.name, cpf: tenant.cpf || undefined,
@@ -109,6 +129,13 @@ export default function TenantProfilePage() {
     if (error) { toast.error("Erro ao enviar arquivo."); return; }
     await supabase.from("documents").insert({ tenant_id: id!, file_name: file.name, file_url: path, file_type: "contract" });
     toast.success("Contrato enviado!");
+    refetchDocs();
+  };
+
+  const downloadDocument = async (doc: any) => {
+    const { data } = await supabase.storage.from("contracts").createSignedUrl(doc.file_url, 3600);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+    else toast.error("Erro ao abrir documento.");
   };
 
   return (
@@ -118,10 +145,13 @@ export default function TenantProfilePage() {
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={handleEdit}><Edit className="mr-1 h-4 w-4" />Editar</Button>
         <Button variant="outline" size="sm" onClick={sendWhatsApp}><MessageCircle className="mr-1 h-4 w-4" />WhatsApp</Button>
+        {tenant.phone && (
+          <Button variant="outline" size="sm" onClick={openWhatsAppDirect}><Phone className="mr-1 h-4 w-4" />Abrir Chat</Button>
+        )}
         <Button variant="outline" size="sm" onClick={moveToFormer}><UserX className="mr-1 h-4 w-4" />Ex-inquilino</Button>
         <label>
           <Button variant="outline" size="sm" asChild><span><Upload className="mr-1 h-4 w-4" />Upload Contrato</span></Button>
-          <input type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
+          <input type="file" accept=".pdf,.jpg,.png,.doc,.docx" className="hidden" onChange={handleUpload} />
         </label>
       </div>
 
@@ -131,16 +161,51 @@ export default function TenantProfilePage() {
           <p className="text-sm text-muted-foreground">{tenant.property?.address} - Casa {tenant.house_number}</p>
         </CardHeader>
         <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-          <div><span className="text-muted-foreground">Aluguel</span><p className="font-semibold">R$ {Number(tenant.rent_amount).toFixed(2)}</p></div>
+          <div><span className="text-muted-foreground">Aluguel</span><p className="font-semibold text-success">R$ {Number(tenant.rent_amount).toFixed(2)}</p></div>
           <div><span className="text-muted-foreground">Caução</span><p className="font-semibold">R$ {Number(tenant.deposit || 0).toFixed(2)}</p></div>
           <div><span className="text-muted-foreground">Vencimento</span><p className="font-semibold">Dia {tenant.payment_day}</p></div>
           <div><span className="text-muted-foreground">Status</span><Badge variant={tenant.status === "active" ? "default" : "secondary"}>{tenant.status === "active" ? "Ativo" : "Encerrado"}</Badge></div>
           {tenant.entry_date && <div><span className="text-muted-foreground">Entrada</span><p>{new Date(tenant.entry_date).toLocaleDateString("pt-BR")}</p></div>}
           {tenant.exit_date && <div><span className="text-muted-foreground">Saída</span><p>{new Date(tenant.exit_date).toLocaleDateString("pt-BR")}</p></div>}
           {tenant.cpf && <div><span className="text-muted-foreground">CPF</span><p>{tenant.cpf}</p></div>}
-          {tenant.phone && <div><span className="text-muted-foreground">Telefone</span><p>{tenant.phone}</p></div>}
+          {tenant.phone && (
+            <div>
+              <span className="text-muted-foreground">Telefone</span>
+              <p className="flex items-center gap-1 cursor-pointer text-primary hover:underline" onClick={openWhatsAppDirect}>
+                {tenant.phone} <ExternalLink className="h-3 w-3" />
+              </p>
+            </div>
+          )}
+          {tenant.property && <div><span className="text-muted-foreground">Condomínio</span><p>{tenant.property.name || tenant.property.address}</p></div>}
         </CardContent>
       </Card>
+
+      {/* Documents Section */}
+      {documents && documents.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2"><FileText className="h-5 w-5" />Documentos / Contratos</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {documents.map((doc) => (
+                <div key={doc.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">{doc.file_name}</p>
+                      <p className="text-xs text-muted-foreground">{new Date(doc.created_at).toLocaleDateString("pt-BR")}</p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => downloadDocument(doc)}>
+                    <ExternalLink className="mr-1 h-3 w-3" />Abrir
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
@@ -183,7 +248,18 @@ export default function TenantProfilePage() {
           <div className="space-y-3">
             <div><Label>Nome</Label><Input value={editForm.name || ""} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></div>
             <div><Label>CPF</Label><Input value={editForm.cpf || ""} onChange={(e) => setEditForm({ ...editForm, cpf: e.target.value })} /></div>
-            <div><Label>Telefone</Label><Input value={editForm.phone || ""} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} /></div>
+            <div><Label>Telefone / WhatsApp</Label><Input value={editForm.phone || ""} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} /></div>
+            <div>
+              <Label>Condomínio / Propriedade</Label>
+              <Select value={editForm.property_id || ""} onValueChange={(v) => setEditForm({ ...editForm, property_id: v })}>
+                <SelectTrigger><SelectValue placeholder="Selecione o condomínio" /></SelectTrigger>
+                <SelectContent>
+                  {properties?.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name || p.address}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div><Label>Casa</Label><Input value={editForm.house_number || ""} onChange={(e) => setEditForm({ ...editForm, house_number: e.target.value })} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>Aluguel</Label><Input type="number" value={editForm.rent_amount || ""} onChange={(e) => setEditForm({ ...editForm, rent_amount: e.target.value })} /></div>
