@@ -42,7 +42,7 @@ export default function ReceiptPage() {
     return `Fortaleza ${d.getDate()} de ${MONTHS_PT[d.getMonth()].toLowerCase()} de ${d.getFullYear()}`;
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!tenant) { toast.error("Selecione um inquilino."); return; }
     const data: ReceiptData = {
       tenantName: tenant.name, cpf: tenant.cpf || undefined,
@@ -50,12 +50,12 @@ export default function ReceiptPage() {
       amount, month: parseInt(month), year: parseInt(year),
       paymentDate: emissionDate, paymentMethod,
     };
-    const doc = generateReceipt(data);
+    const doc = await generateReceipt(data);
     doc.save(`recibo_${tenant.name}_${monthName}_${year}.pdf`);
     toast.success("Recibo baixado!");
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!tenant) { toast.error("Selecione um inquilino."); return; }
     const data: ReceiptData = {
       tenantName: tenant.name, cpf: tenant.cpf || undefined,
@@ -63,7 +63,7 @@ export default function ReceiptPage() {
       amount, month: parseInt(month), year: parseInt(year),
       paymentDate: emissionDate, paymentMethod,
     };
-    const doc = generateReceipt(data);
+    const doc = await generateReceipt(data);
     const blob = doc.output("blob");
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");
