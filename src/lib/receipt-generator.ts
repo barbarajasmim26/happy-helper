@@ -24,19 +24,20 @@ function numberToWords(n: number): string {
     if (t > 0) parts.push(tens[t]);
     if (u > 0) parts.push(units[u]);
   }
+
   return parts.join(" e ");
+}
+
+function capitalize(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 export function amountInWords(value: number): string {
   const intPart = Math.floor(value);
   const cents = Math.round((value - intPart) * 100);
-  let result = capitalize(numberToWords(intPart)) + " reais";
+  let result = `${capitalize(numberToWords(intPart))} reais`;
   if (cents > 0) result += ` e ${numberToWords(cents)} centavos`;
   return result;
-}
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 export interface ReceiptData {
@@ -50,6 +51,8 @@ export interface ReceiptData {
   paymentDate: string;
   paymentMethod: string;
   paymentType?: string;
+  receiptNumber?: string;
+  signatureName?: string;
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -62,61 +65,101 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-export async function generateReceipt(data: ReceiptData): Promise<jsPDF> {
-  const doc = new jsPDF();
-  const monthName = MONTHS_PT[data.month - 1];
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 25;
-  const maxW = pageWidth - margin * 2;
+export function parseReceiptDate(paymentDate: string) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+    return new Date(`${paymentDate}T12:00:00`);
+  }
 
-  // Logo
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(paymentDate)) {
+    const [day, month, year] = paymentDate.split("/").map(Number);
+    return new Date(year, month - 1, day, 12, 0, 0);
+  }
+
+  const fallback = new Date(paymentDate);
+  return Number.isNaN(fallback.getTime()) ? new Date() : fallback;
+}
+
+export function formatReceiptDate(paymentDate: string) {
+  const dateObj = parseReceiptDate(paymentDate);
+  return `Cascavel/CE, ${dateObj.getDate()} de ${MONTHS_PT[dateObj.getMonth()]} de ${dateObj.getFullYear()}`;
+}
+
+export async function generateReceipt(data: ReceiptData): Promise<jsPDF> {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 24;
+  const maxWidth = pageWidth - margin * 2;
+  const monthName = MONTHS_PT[data.month - 1] || "";
+  const paymentType = (data.paymentType || "aluguel").toLowerCase();
+  const receiptNumber = data.receiptNumber || `REC-${data.year}-${String(data.month).padStart(2, "0")}`;
+  const signatureName = data.signatureName || "LOCADOR";
+  const address = `${data.address}${data.houseNumber ? `, casa ${data.houseNumber}` : ""}`;
+
+  doc.setDrawColor(212, 212, 216);
+  doc.roundedRect(14, 14, pageWidth - 28, 269, 6, 6);
+
   try {
     const logoImg = await loadImage(logoSrc);
-    const logoW = 55;
-    const logoH = (logoImg.height / logoImg.width) * logoW;
-    doc.addImage(logoImg, "PNG", (pageWidth - logoW) / 2, 12, logoW, logoH);
+    const logoWidth = 56;
+    const logoHeight = (logoImg.height / logoImg.width) * logoWidth;
+    doc.addImage(logoImg, "PNG", (pageWidth - logoWidth) / 2, 18, logoWidth, logoHeight);
   } catch {}
 
-  // Title
   let y = 50;
-  doc.setFontSize(16);
+
   doc.setFont("helvetica", "bold");
-  doc.text("RECIBO DE PAGAMENTO", pageWidth / 2, y, { align: "center" });
-  y += 15;
-
-  // Body
-  doc.setFontSize(12);
-  doc.setFont("helvetica", "normal");
-  const paymentType = data.paymentType || "aluguel";
-  const bodyText = `Recebi de ${data.tenantName}${data.cpf ? `, CPF n° ${data.cpf}` : ""}, o valor de R$ ${data.amount.toFixed(2)} (${amountInWords(data.amount)}) ${data.paymentMethod}, valor este referente ao ${paymentType.toLowerCase()} do mês de ${monthName}, do imóvel localizado na ${data.address}${data.houseNumber ? `, casa ${data.houseNumber}` : ""}.`;
-
-  const bodyLines = doc.splitTextToSize(bodyText, maxW);
-  doc.text(bodyLines, margin, y);
-  y += bodyLines.length * 7 + 20;
-
-  // Date
-  const dateObj = new Date(data.paymentDate + "T12:00:00");
-  const dateStr = `Cascavel/CE, ${dateObj.getDate()} de ${MONTHS_PT[dateObj.getMonth()]} de ${dateObj.getFullYear()}`;
   doc.setFontSize(11);
-  doc.text(dateStr, pageWidth / 2, y, { align: "center" });
-  y += 25;
-
-  // Signature
-  try {
-    const sigImg = await loadImage(signatureSrc);
-    const sigW = 40;
-    const sigH = (sigImg.height / sigImg.width) * sigW;
-    doc.addImage(sigImg, "PNG", (pageWidth - sigW) / 2, y, sigW, sigH);
-    y += sigH + 2;
-  } catch {}
-
-  // Signature line
-  doc.setLineWidth(0.4);
-  doc.line(pageWidth / 2 - 35, y, pageWidth / 2 + 35, y);
-  y += 5;
+  doc.text("RECIBO DE PAGAMENTO", margin, y);
   doc.setFontSize(10);
+  doc.setTextColor(100, 116, 139);
+  doc.text(receiptNumber, pageWidth - margin, y, { align: "right" });
+
+  y += 10;
+  doc.setDrawColor(226, 232, 240);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 12;
+
+  doc.setTextColor(28, 25, 23);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11.5);
+
+  const intro = `Recebi de ${data.tenantName}${data.cpf ? `, CPF ${data.cpf}` : ""}, a quantia de R$ ${data.amount.toFixed(2)} (${amountInWords(data.amount)}).`;
+  const reference = `O valor refere-se ao ${paymentType} do mês de ${monthName}/${data.year}, referente ao imóvel localizado em ${address}.`;
+  const method = `Forma de pagamento: ${data.paymentMethod}.`;
+
+  const paragraphs = [intro, reference, method];
+
+  for (const paragraph of paragraphs) {
+    const lines = doc.splitTextToSize(paragraph, maxWidth);
+    doc.text(lines, margin, y);
+    y += lines.length * 6.5 + 6;
+  }
+
+  y += 8;
+  doc.setFontSize(10.5);
+  doc.setTextColor(87, 83, 78);
+  doc.text(formatReceiptDate(data.paymentDate), pageWidth - margin, y, { align: "right" });
+
+  y += 18;
+
+  try {
+    const signatureImg = await loadImage(signatureSrc);
+    const signatureWidth = 42;
+    const signatureHeight = (signatureImg.height / signatureImg.width) * signatureWidth;
+    doc.addImage(signatureImg, "PNG", (pageWidth - signatureWidth) / 2, y, signatureWidth, signatureHeight);
+    y += signatureHeight + 2;
+  } catch {
+    y += 16;
+  }
+
+  doc.setDrawColor(63, 63, 70);
+  doc.line(pageWidth / 2 - 34, y, pageWidth / 2 + 34, y);
+  y += 6;
+
   doc.setFont("helvetica", "bold");
-  doc.text("LOCADOR", pageWidth / 2, y, { align: "center" });
+  doc.setFontSize(10);
+  doc.setTextColor(28, 25, 23);
+  doc.text(signatureName, pageWidth / 2, y, { align: "center" });
 
   return doc;
 }

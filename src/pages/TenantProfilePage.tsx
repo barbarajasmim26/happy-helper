@@ -11,8 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ArrowLeft, Edit, MessageCircle, Receipt, UserX, Upload, FileText, ExternalLink, Phone } from "lucide-react";
 import { toast } from "sonner";
-import { openWhatsApp, getMessageTemplates } from "@/lib/whatsapp";
+import { openWhatsApp, openWhatsAppChat, getMessageTemplates } from "@/lib/whatsapp";
 import { generateReceipt } from "@/lib/receipt-generator";
+import { extractSupabaseStoragePath, isAbsoluteHttpUrl } from "@/lib/document-url";
 import { supabase } from "@/integrations/supabase/client";
 
 const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -98,17 +99,22 @@ export default function TenantProfilePage() {
 
   const openWhatsAppDirect = () => {
     if (!tenant.phone) { toast.error("Telefone não cadastrado."); return; }
-    const cleanPhone = tenant.phone.replace(/\D/g, "");
-    const fullPhone = cleanPhone.startsWith("55") ? cleanPhone : `55${cleanPhone}`;
-    window.open(`https://wa.me/${fullPhone}`, "_blank");
+    openWhatsAppChat(tenant.phone);
   };
 
   const handleReceipt = async (month: number) => {
     const doc = await generateReceipt({
-      tenantName: tenant.name, cpf: tenant.cpf || undefined,
-      address: tenant.property?.address || "", houseNumber: tenant.house_number || undefined,
-      amount: Number(tenant.rent_amount), month, year,
-      paymentDate: new Date().toLocaleDateString("pt-BR"), paymentMethod: "Dinheiro/Pix",
+      tenantName: tenant.name,
+      cpf: tenant.cpf || undefined,
+      address: tenant.property?.address || "",
+      houseNumber: tenant.house_number || undefined,
+      amount: Number(tenant.rent_amount),
+      month,
+      year,
+      paymentDate: new Date().toISOString().split("T")[0],
+      paymentMethod: "Pix",
+      receiptNumber: `REC-${year}-${String(month).padStart(2, "0")}-${tenant.id.slice(0, 6).toUpperCase()}`,
+      signatureName: "LOCADOR",
     });
     doc.save(`recibo_${tenant.name}_${month}_${year}.pdf`);
     toast.success("Recibo gerado!");
@@ -126,9 +132,25 @@ export default function TenantProfilePage() {
   };
 
   const downloadDocument = async (doc: any) => {
-    const { data } = await supabase.storage.from("contracts").createSignedUrl(doc.file_url, 3600);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-    else toast.error("Erro ao abrir documento.");
+    const storagePath = extractSupabaseStoragePath(doc.file_url || "");
+
+    if (storagePath) {
+      const { data, error } = await supabase.storage.from("contracts").createSignedUrl(storagePath, 3600);
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      if (error) {
+        console.error("Erro ao gerar URL assinada do documento:", error);
+      }
+    }
+
+    if (isAbsoluteHttpUrl(doc.file_url || "")) {
+      window.open(doc.file_url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    toast.error("Erro ao abrir documento.");
   };
 
   return (
