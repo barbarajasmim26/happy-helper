@@ -109,7 +109,7 @@ export default function OverduePage() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-semibold">{t.name}</p>
-                        <Badge variant={pattern.color} className="text-[10px] flex items-center gap-1">
+                        <Badge variant={pattern.color === "warning" ? "outline" : pattern.color} className={`text-[10px] flex items-center gap-1 ${pattern.color === "warning" ? "bg-warning/10 text-warning border-warning/30" : ""}`}>
                           {PatternIcon && <PatternIcon className="h-3 w-3" />}
                           {pattern.label}
                         </Badge>
