@@ -73,13 +73,6 @@ export default function TenantProfilePage() {
       });
       toast.success("Salvo!");
       setEditOpen(false);
-
-      // Open WhatsApp Web if phone was saved
-      if (editForm.phone) {
-        const cleanPhone = editForm.phone.replace(/\D/g, "");
-        const fullPhone = cleanPhone.startsWith("55") ? cleanPhone : `55${cleanPhone}`;
-        window.open(`https://web.whatsapp.com/send?phone=${fullPhone}`, "_blank");
-      }
     } catch (e: any) { toast.error(e.message); }
   };
 
@@ -107,7 +100,7 @@ export default function TenantProfilePage() {
     if (!tenant.phone) { toast.error("Telefone não cadastrado."); return; }
     const cleanPhone = tenant.phone.replace(/\D/g, "");
     const fullPhone = cleanPhone.startsWith("55") ? cleanPhone : `55${cleanPhone}`;
-    window.open(`https://web.whatsapp.com/send?phone=${fullPhone}`, "_blank");
+    window.open(`https://wa.me/${fullPhone}`, "_blank");
   };
 
   const handleReceipt = async (month: number) => {
