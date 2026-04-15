@@ -12,6 +12,11 @@ export default defineConfig(({ mode }) => ({
       overlay: false,
     },
   },
+  preview: {
+    host: "0.0.0.0",
+    port: 4173,
+    allowedHosts: ["happy-helper-dbsw.onrender.com"],
+  },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
     alias: {
