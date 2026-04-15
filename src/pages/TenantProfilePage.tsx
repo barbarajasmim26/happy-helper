@@ -90,8 +90,8 @@ export default function TenantProfilePage() {
     openWhatsApp({ phone: tenant.phone, message: templates.reminder });
   };
 
-  const handleReceipt = (month: number) => {
-    const doc = generateReceipt({
+  const handleReceipt = async (month: number) => {
+    const doc = await generateReceipt({
       tenantName: tenant.name, cpf: tenant.cpf || undefined,
       address: tenant.property?.address || "", houseNumber: tenant.house_number || undefined,
       amount: Number(tenant.rent_amount), month, year,
