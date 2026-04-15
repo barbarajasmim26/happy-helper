@@ -11,23 +11,14 @@ import { Printer, Download, Receipt } from "lucide-react";
 import logoMesquita from "@/assets/logo-mesquita.png";
 import signatureImg from "@/assets/signature.png";
 
-const MONTHS_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-
-const LOCADOR = {
-  name: "MARIA ENEIDE DA SILVA",
-  nationality: "brasileira",
-  maritalStatus: "união estável",
-  profession: "comerciante",
-  cpf: "322.633.763-72",
-  address: "Avenida Nova Fortaleza, 1391, Planalto Ayrton Senna, Fortaleza/CE, CEP: 61.930-350",
-};
+const MONTHS_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 
 export default function ReceiptPage() {
   const { data: tenants } = useTenants("active");
   const { data: properties } = useProperties();
   const [selectedProperty, setSelectedProperty] = useState("all");
   const [selectedTenant, setSelectedTenant] = useState("");
-  const [paymentType, setPaymentType] = useState("Aluguel");
+  const [paymentType, setPaymentType] = useState("aluguel");
   const [customAmount, setCustomAmount] = useState("");
   const [month, setMonth] = useState(String(new Date().getMonth() + 1));
   const [year, setYear] = useState(String(new Date().getFullYear()));
@@ -47,39 +38,41 @@ export default function ReceiptPage() {
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "";
     const d = new Date(dateStr + "T12:00:00");
-    return `Cascavel/CE, ${d.getDate()} de ${MONTHS_PT[d.getMonth()].toLowerCase()} de ${d.getFullYear()}.`;
+    return `Cascavel/CE, ${d.getDate()} de ${MONTHS_PT[d.getMonth()]} de ${d.getFullYear()}`;
   };
 
-  const handleDownload = async () => {
-    if (!tenant) { toast.error("Selecione um inquilino."); return; }
-    const data: ReceiptData = {
+  const buildData = (): ReceiptData | null => {
+    if (!tenant) { toast.error("Selecione um inquilino."); return null; }
+    return {
       tenantName: tenant.name, cpf: tenant.cpf || undefined,
       address: tenant.property?.address || "", houseNumber: tenant.house_number || undefined,
       amount, month: parseInt(month), year: parseInt(year),
       paymentDate: emissionDate, paymentMethod, paymentType,
     };
+  };
+
+  const handleDownload = async () => {
+    const data = buildData();
+    if (!data) return;
     const doc = await generateReceipt(data);
-    doc.save(`recibo_${tenant.name}_${monthName}_${year}.pdf`);
+    doc.save(`recibo_${tenant!.name}_${monthName}_${year}.pdf`);
     toast.success("Recibo baixado!");
   };
 
   const handlePrint = async () => {
-    if (!tenant) { toast.error("Selecione um inquilino."); return; }
-    const data: ReceiptData = {
-      tenantName: tenant.name, cpf: tenant.cpf || undefined,
-      address: tenant.property?.address || "", houseNumber: tenant.house_number || undefined,
-      amount, month: parseInt(month), year: parseInt(year),
-      paymentDate: emissionDate, paymentMethod, paymentType,
-    };
+    const data = buildData();
+    if (!data) return;
     const doc = await generateReceipt(data);
     const blob = doc.output("blob");
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
+    window.open(URL.createObjectURL(blob), "_blank");
   };
+
+  const address = tenant?.property?.address
+    ? `${tenant.property.address}${tenant.house_number ? `, casa ${tenant.house_number}` : ""}`
+    : "____________________________";
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
@@ -92,12 +85,12 @@ export default function ReceiptPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleDownload}><Download className="mr-2 h-4 w-4" />Salvar PDF</Button>
-          <Button onClick={handlePrint}><Printer className="mr-2 h-4 w-4" />Imprimir Recibo</Button>
+          <Button onClick={handlePrint}><Printer className="mr-2 h-4 w-4" />Imprimir</Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left: Form */}
+        {/* Form */}
         <div className="space-y-6">
           <Card>
             <CardContent className="pt-6 space-y-4">
@@ -133,9 +126,9 @@ export default function ReceiptPage() {
                   <Select value={paymentType} onValueChange={setPaymentType}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Aluguel">Aluguel</SelectItem>
-                      <SelectItem value="Caução">Caução</SelectItem>
-                      <SelectItem value="Outro">Outro</SelectItem>
+                      <SelectItem value="aluguel">Aluguel</SelectItem>
+                      <SelectItem value="caução">Caução</SelectItem>
+                      <SelectItem value="outro">Outro</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -149,7 +142,7 @@ export default function ReceiptPage() {
                   <Label className="text-xs font-bold text-muted-foreground uppercase">Mês Ref.</Label>
                   <Select value={month} onValueChange={setMonth}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{MONTHS_PT.map((m, i) => <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>)}</SelectContent>
+                    <SelectContent>{MONTHS_PT.map((m, i) => <SelectItem key={i} value={String(i + 1)}>{m.charAt(0).toUpperCase() + m.slice(1)}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div>
@@ -169,69 +162,31 @@ export default function ReceiptPage() {
           </Card>
         </div>
 
-        {/* Right: Live Preview */}
+        {/* Preview */}
         <div>
           <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-3">Pré-visualização do Recibo</p>
-          <div className="bg-white text-black border rounded-xl p-8 shadow-sm min-h-[600px] flex flex-col">
-            {/* Logo */}
+          <div className="bg-white text-black border rounded-xl p-8 shadow-sm min-h-[500px] flex flex-col">
             <div className="flex justify-center mb-4">
-              <img src={logoMesquita} alt="Mesquita Administração de Imóveis" className="h-14 object-contain" />
+              <img src={logoMesquita} alt="Logo" className="h-14 object-contain" />
             </div>
 
-            {/* Title */}
-            <h3 className="text-center font-bold text-base mb-1">RECIBO DE PAGAMENTO DE ALUGUEL</h3>
-            <div className="border-b border-black/30 mb-4" />
+            <h3 className="text-center font-bold text-base mb-6">RECIBO DE PAGAMENTO</h3>
 
-            {/* Locador */}
-            <div className="text-[11px] leading-relaxed mb-3">
-              <span className="font-bold">LOCADOR: </span>
-              {LOCADOR.name}, {LOCADOR.nationality}, {LOCADOR.maritalStatus}, {LOCADOR.profession}, inscrita no CPF sob o n° {LOCADOR.cpf}, residente e domiciliada à {LOCADOR.address}.
-            </div>
-
-            {/* Locatário */}
-            <div className="text-[11px] leading-relaxed mb-4">
-              <span className="font-bold">LOCATÁRIO: </span>
-              <span className="border-b border-black/30">{tenant?.name || "____________________________"}</span>
-              {tenant?.cpf && <>, inscrito(a) no CPF sob o n° <span className="border-b border-black/30">{tenant.cpf}</span></>}
-              , residente e domiciliado(a) em{" "}
-              <span className="border-b border-black/30">
-                {tenant?.property?.address ? `${tenant.property.address}${tenant.house_number ? `, Casa ${tenant.house_number}` : ""}` : "____________________________"}
-              </span>.
-            </div>
-
-            <div className="border-b border-black/20 mb-4" />
-
-            {/* Body */}
-            <div className="text-xs leading-relaxed flex-1 space-y-3">
+            <div className="text-xs leading-relaxed flex-1 space-y-4">
               <p>
                 Recebi de <strong>{tenant?.name || "____________________________"}</strong>
                 {tenant?.cpf && <>, CPF n° <strong>{tenant.cpf}</strong></>}
-                , o valor de{" "}
-                <strong>R$ {amount.toFixed(2)}</strong> ({amountInWords(amount)}),
-                referente ao pagamento de {paymentType.toLowerCase()} do mês de {monthName.toLowerCase()} de {year}, do imóvel
-                situado em{" "}
-                <strong>
-                  {tenant?.property?.address ? `${tenant.property.address}${tenant.house_number ? `, Casa ${tenant.house_number}` : ""}` : "____________________________"}
-                </strong>.
+                , o valor de <strong>R$ {amount.toFixed(2)}</strong> ({amountInWords(amount)}) {paymentMethod},
+                valor este referente ao {paymentType} do mês de {monthName}, do imóvel localizado na <strong>{address}</strong>.
               </p>
-
-              <p><strong>Forma de pagamento:</strong> {paymentMethod}</p>
             </div>
 
-            {/* Date */}
-            <p className="text-center text-xs mt-6 mb-6">{formatDate(emissionDate)}</p>
+            <p className="text-center text-xs mt-8 mb-8">{formatDate(emissionDate)}</p>
 
-            {/* Signature - Locador */}
-            <div className="flex flex-col items-center mb-6">
+            <div className="flex flex-col items-center">
               <img src={signatureImg} alt="Assinatura" className="h-14 object-contain mb-0" />
               <div className="w-48 border-t border-black/40" />
               <p className="text-xs font-bold mt-1">LOCADOR</p>
-            </div>
-
-            {/* Signature - Locatário */}
-            <div className="flex flex-col items-center">
-              <div className="w-48 border-t border-black/40 mt-8" />
-              <p className="text-xs font-bold mt-1">LOCATÁRIO</p>
             </div>
           </div>
         </div>
