@@ -5,14 +5,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { generateReceipt, type ReceiptData } from "@/lib/receipt-generator";
-import { amountInWords } from "@/lib/receipt-generator";
+import { generateReceipt, type ReceiptData, amountInWords } from "@/lib/receipt-generator";
 import { toast } from "sonner";
 import { Printer, Download, Receipt } from "lucide-react";
 import logoMesquita from "@/assets/logo-mesquita.png";
 import signatureImg from "@/assets/signature.png";
 
 const MONTHS_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+const LOCADOR = {
+  name: "MARIA ENEIDE DA SILVA",
+  nationality: "brasileira",
+  maritalStatus: "união estável",
+  profession: "comerciante",
+  cpf: "322.633.763-72",
+  address: "Avenida Nova Fortaleza, 1391, Planalto Ayrton Senna, Fortaleza/CE, CEP: 61.930-350",
+};
 
 export default function ReceiptPage() {
   const { data: tenants } = useTenants("active");
@@ -39,7 +47,7 @@ export default function ReceiptPage() {
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "";
     const d = new Date(dateStr + "T12:00:00");
-    return `Fortaleza ${d.getDate()} de ${MONTHS_PT[d.getMonth()].toLowerCase()} de ${d.getFullYear()}`;
+    return `Cascavel/CE, ${d.getDate()} de ${MONTHS_PT[d.getMonth()].toLowerCase()} de ${d.getFullYear()}.`;
   };
 
   const handleDownload = async () => {
@@ -48,7 +56,7 @@ export default function ReceiptPage() {
       tenantName: tenant.name, cpf: tenant.cpf || undefined,
       address: tenant.property?.address || "", houseNumber: tenant.house_number || undefined,
       amount, month: parseInt(month), year: parseInt(year),
-      paymentDate: emissionDate, paymentMethod,
+      paymentDate: emissionDate, paymentMethod, paymentType,
     };
     const doc = await generateReceipt(data);
     doc.save(`recibo_${tenant.name}_${monthName}_${year}.pdf`);
@@ -61,7 +69,7 @@ export default function ReceiptPage() {
       tenantName: tenant.name, cpf: tenant.cpf || undefined,
       address: tenant.property?.address || "", houseNumber: tenant.house_number || undefined,
       amount, month: parseInt(month), year: parseInt(year),
-      paymentDate: emissionDate, paymentMethod,
+      paymentDate: emissionDate, paymentMethod, paymentType,
     };
     const doc = await generateReceipt(data);
     const blob = doc.output("blob");
@@ -72,7 +80,7 @@ export default function ReceiptPage() {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
             <Receipt className="h-6 w-6 text-primary" />
@@ -91,7 +99,6 @@ export default function ReceiptPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Form */}
         <div className="space-y-6">
-          {/* Section 1: Select tenant */}
           <Card>
             <CardContent className="pt-6 space-y-4">
               <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">1. Selecionar Inquilino</h2>
@@ -117,7 +124,6 @@ export default function ReceiptPage() {
             </CardContent>
           </Card>
 
-          {/* Section 2: Payment data */}
           <Card>
             <CardContent className="pt-6 space-y-4">
               <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">2. Dados do Pagamento</h2>
@@ -166,39 +172,66 @@ export default function ReceiptPage() {
         {/* Right: Live Preview */}
         <div>
           <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-3">Pré-visualização do Recibo</p>
-          <div className="bg-card border rounded-xl p-8 shadow-sm min-h-[500px] flex flex-col">
+          <div className="bg-white text-black border rounded-xl p-8 shadow-sm min-h-[600px] flex flex-col">
             {/* Logo */}
-            <div className="flex justify-center mb-6">
-              <img src={logoMesquita} alt="Mesquita Administração de Imóveis" className="h-16 object-contain" />
+            <div className="flex justify-center mb-4">
+              <img src={logoMesquita} alt="Mesquita Administração de Imóveis" className="h-14 object-contain" />
             </div>
 
             {/* Title */}
-            <h3 className="text-center font-bold text-lg mb-6">RECIBO DE PAGAMENTO</h3>
+            <h3 className="text-center font-bold text-base mb-1">RECIBO DE PAGAMENTO DE ALUGUEL</h3>
+            <div className="border-b border-black/30 mb-4" />
+
+            {/* Locador */}
+            <div className="text-[11px] leading-relaxed mb-3">
+              <span className="font-bold">LOCADOR: </span>
+              {LOCADOR.name}, {LOCADOR.nationality}, {LOCADOR.maritalStatus}, {LOCADOR.profession}, inscrita no CPF sob o n° {LOCADOR.cpf}, residente e domiciliada à {LOCADOR.address}.
+            </div>
+
+            {/* Locatário */}
+            <div className="text-[11px] leading-relaxed mb-4">
+              <span className="font-bold">LOCATÁRIO: </span>
+              <span className="border-b border-black/30">{tenant?.name || "____________________________"}</span>
+              {tenant?.cpf && <>, inscrito(a) no CPF sob o n° <span className="border-b border-black/30">{tenant.cpf}</span></>}
+              , residente e domiciliado(a) em{" "}
+              <span className="border-b border-black/30">
+                {tenant?.property?.address ? `${tenant.property.address}${tenant.house_number ? `, Casa ${tenant.house_number}` : ""}` : "____________________________"}
+              </span>.
+            </div>
+
+            <div className="border-b border-black/20 mb-4" />
 
             {/* Body */}
-            <div className="text-sm leading-relaxed flex-1 space-y-4">
+            <div className="text-xs leading-relaxed flex-1 space-y-3">
               <p>
-                Recebi de <strong className="border-b border-foreground/30 px-1">{tenant?.name || "____________________________"}</strong>, inscrito no
-                CPF n° <strong className="border-b border-foreground/30 px-1">{tenant?.cpf || "___.___.___-__"}</strong>, o valor de{" "}
+                Recebi de <strong>{tenant?.name || "____________________________"}</strong>
+                {tenant?.cpf && <>, CPF n° <strong>{tenant.cpf}</strong></>}
+                , o valor de{" "}
                 <strong>R$ {amount.toFixed(2)}</strong> ({amountInWords(amount)}),
-                referente ao pagamento de {paymentType.toLowerCase()} do mês de {monthName.toLowerCase()}, do imóvel
-                situado em <strong className="border-b border-foreground/30 px-1">
+                referente ao pagamento de {paymentType.toLowerCase()} do mês de {monthName.toLowerCase()} de {year}, do imóvel
+                situado em{" "}
+                <strong>
                   {tenant?.property?.address ? `${tenant.property.address}${tenant.house_number ? `, Casa ${tenant.house_number}` : ""}` : "____________________________"}
                 </strong>.
               </p>
 
-              <p className="text-sm">Forma de pagamento: {paymentMethod}</p>
+              <p><strong>Forma de pagamento:</strong> {paymentMethod}</p>
             </div>
 
             {/* Date */}
-            <p className="text-center text-sm mt-8 mb-8">{formatDate(emissionDate)}</p>
+            <p className="text-center text-xs mt-6 mb-6">{formatDate(emissionDate)}</p>
 
-            {/* Signature */}
-            <div className="flex flex-col items-center mt-auto">
-              <img src={signatureImg} alt="Assinatura" className="h-16 object-contain mb-1" />
-              <div className="w-48 border-t border-foreground/40" />
-              <p className="text-sm font-semibold mt-1">Maria Eneide da Silva</p>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Locadora</p>
+            {/* Signature - Locador */}
+            <div className="flex flex-col items-center mb-6">
+              <img src={signatureImg} alt="Assinatura" className="h-14 object-contain mb-0" />
+              <div className="w-48 border-t border-black/40" />
+              <p className="text-xs font-bold mt-1">LOCADOR</p>
+            </div>
+
+            {/* Signature - Locatário */}
+            <div className="flex flex-col items-center">
+              <div className="w-48 border-t border-black/40 mt-8" />
+              <p className="text-xs font-bold mt-1">LOCATÁRIO</p>
             </div>
           </div>
         </div>

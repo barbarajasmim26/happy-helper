@@ -45,7 +45,18 @@ export interface ReceiptData {
   year: number;
   paymentDate: string;
   paymentMethod: string;
+  paymentType?: string;
 }
+
+// Locador data
+const LOCADOR = {
+  name: "MARIA ENEIDE DA SILVA",
+  nationality: "brasileira",
+  maritalStatus: "união estável",
+  profession: "comerciante",
+  cpf: "322.633.763-72",
+  address: "Avenida Nova Fortaleza, 1391, Planalto Ayrton Senna, Fortaleza/CE, CEP: 61.930-350",
+};
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -61,41 +72,73 @@ export async function generateReceipt(data: ReceiptData): Promise<jsPDF> {
   const doc = new jsPDF();
   const monthName = MONTHS_PT[data.month - 1];
   const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 25;
+  const maxW = pageWidth - margin * 2;
 
   // Logo
   try {
     const logoImg = await loadImage(logoSrc);
-    const logoW = 60;
+    const logoW = 55;
     const logoH = (logoImg.height / logoImg.width) * logoW;
-    doc.addImage(logoImg, "PNG", (pageWidth - logoW) / 2, 15, logoW, logoH);
+    doc.addImage(logoImg, "PNG", (pageWidth - logoW) / 2, 12, logoW, logoH);
   } catch {}
 
   // Title
-  doc.setFontSize(16);
+  let y = 48;
+  doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
-  doc.text("RECIBO DE PAGAMENTO", pageWidth / 2, 55, { align: "center" });
+  doc.text("RECIBO DE PAGAMENTO DE ALUGUEL", pageWidth / 2, y, { align: "center" });
+  y += 4;
+  doc.setLineWidth(0.5);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 12;
 
-  // Body
-  doc.setFontSize(11);
+  // Locador section
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text("LOCADOR: ", margin, y);
   doc.setFont("helvetica", "normal");
-  let y = 75;
-  const margin = 25;
-  const maxW = pageWidth - margin * 2;
+  const locadorText = `${LOCADOR.name}, ${LOCADOR.nationality}, ${LOCADOR.maritalStatus}, ${LOCADOR.profession}, inscrita no CPF sob o n° ${LOCADOR.cpf}, residente e domiciliada à ${LOCADOR.address}.`;
+  const locadorLines = doc.splitTextToSize(locadorText, maxW - 22);
+  doc.text(locadorLines, margin + 22, y);
+  y += locadorLines.length * 5 + 8;
 
-  const bodyText = `Recebi de ${data.tenantName}, inscrito no CPF n° ${data.cpf || "___.___.___-__"}, o valor de R$ ${data.amount.toFixed(2)} (${amountInWords(data.amount)}), referente ao pagamento de aluguel do mês de ${monthName?.toLowerCase()}, do imóvel situado em ${data.address}${data.houseNumber ? `, Casa ${data.houseNumber}` : ""}.`;
+  // Locatário section
+  doc.setFont("helvetica", "bold");
+  doc.text("LOCATÁRIO: ", margin, y);
+  doc.setFont("helvetica", "normal");
+  const locatarioText = `${data.tenantName}${data.cpf ? `, inscrito(a) no CPF sob o n° ${data.cpf}` : ""}, residente e domiciliado(a) em ${data.address}${data.houseNumber ? `, Casa ${data.houseNumber}` : ""}.`;
+  const locatarioLines = doc.splitTextToSize(locatarioText, maxW - 25);
+  doc.text(locatarioLines, margin + 25, y);
+  y += locatarioLines.length * 5 + 12;
 
-  const lines = doc.splitTextToSize(bodyText, maxW);
-  doc.text(lines, margin, y);
-  y += lines.length * 6 + 8;
+  // Separator
+  doc.setLineWidth(0.3);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 10;
 
-  doc.text(`Forma de pagamento: ${data.paymentMethod}`, margin, y);
-  y += 20;
+  // Receipt body
+  doc.setFontSize(11);
+  const paymentType = data.paymentType || "aluguel";
+  const bodyText = `Recebi de ${data.tenantName}${data.cpf ? `, CPF n° ${data.cpf}` : ""}, o valor de R$ ${data.amount.toFixed(2)} (${amountInWords(data.amount)}), referente ao pagamento de ${paymentType.toLowerCase()} do mês de ${monthName?.toLowerCase()} de ${data.year}, do imóvel situado em ${data.address}${data.houseNumber ? `, Casa ${data.houseNumber}` : ""}.`;
+
+  const bodyLines = doc.splitTextToSize(bodyText, maxW);
+  doc.text(bodyLines, margin, y);
+  y += bodyLines.length * 6 + 8;
+
+  // Payment method
+  doc.setFont("helvetica", "bold");
+  doc.text("Forma de pagamento: ", margin, y);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.paymentMethod, margin + 48, y);
+  y += 18;
 
   // Date
   const dateObj = new Date(data.paymentDate + "T12:00:00");
-  const dateStr = `Fortaleza ${dateObj.getDate()} de ${MONTHS_PT[dateObj.getMonth()]?.toLowerCase()} de ${dateObj.getFullYear()}`;
+  const dateStr = `Cascavel/CE, ${dateObj.getDate()} de ${MONTHS_PT[dateObj.getMonth()]?.toLowerCase()} de ${dateObj.getFullYear()}.`;
+  doc.setFontSize(10);
   doc.text(dateStr, pageWidth / 2, y, { align: "center" });
-  y += 25;
+  y += 22;
 
   // Signature
   try {
@@ -103,19 +146,22 @@ export async function generateReceipt(data: ReceiptData): Promise<jsPDF> {
     const sigW = 40;
     const sigH = (sigImg.height / sigImg.width) * sigW;
     doc.addImage(sigImg, "PNG", (pageWidth - sigW) / 2, y, sigW, sigH);
-    y += sigH + 3;
+    y += sigH + 2;
   } catch {}
 
   // Signature line
-  doc.line(pageWidth / 2 - 30, y, pageWidth / 2 + 30, y);
-  y += 6;
-  doc.setFontSize(11);
-  doc.setFont("helvetica", "bold");
-  doc.text("Maria Eneide da Silva", pageWidth / 2, y, { align: "center" });
+  doc.setLineWidth(0.4);
+  doc.line(pageWidth / 2 - 35, y, pageWidth / 2 + 35, y);
   y += 5;
-  doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
-  doc.text("LOCADORA", pageWidth / 2, y, { align: "center" });
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text("LOCADOR", pageWidth / 2, y, { align: "center" });
+  y += 25;
+
+  // Locatário signature line
+  doc.line(pageWidth / 2 - 35, y, pageWidth / 2 + 35, y);
+  y += 5;
+  doc.text("LOCATÁRIO", pageWidth / 2, y, { align: "center" });
 
   return doc;
 }
