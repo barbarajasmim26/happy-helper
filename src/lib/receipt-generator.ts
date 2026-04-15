@@ -1,4 +1,6 @@
 import jsPDF from "jspdf";
+import logoSrc from "@/assets/logo-mesquita.png";
+import signatureSrc from "@/assets/signature.png";
 
 const MONTHS_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
@@ -45,33 +47,75 @@ export interface ReceiptData {
   paymentMethod: string;
 }
 
-export function generateReceipt(data: ReceiptData): jsPDF {
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+export async function generateReceipt(data: ReceiptData): Promise<jsPDF> {
   const doc = new jsPDF();
   const monthName = MONTHS_PT[data.month - 1];
+  const pageWidth = doc.internal.pageSize.getWidth();
 
-  doc.setFontSize(18);
-  doc.text("RECIBO DE ALUGUEL", 105, 30, { align: "center" });
+  // Logo
+  try {
+    const logoImg = await loadImage(logoSrc);
+    const logoW = 60;
+    const logoH = (logoImg.height / logoImg.width) * logoW;
+    doc.addImage(logoImg, "PNG", (pageWidth - logoW) / 2, 15, logoW, logoH);
+  } catch {}
 
+  // Title
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.text("RECIBO DE PAGAMENTO", pageWidth / 2, 55, { align: "center" });
+
+  // Body
   doc.setFontSize(11);
-  let y = 55;
+  doc.setFont("helvetica", "normal");
+  let y = 75;
+  const margin = 25;
+  const maxW = pageWidth - margin * 2;
 
-  doc.text(`Recebi de ${data.tenantName}`, 20, y);
-  y += 8;
-  if (data.cpf) { doc.text(`CPF: ${data.cpf}`, 20, y); y += 8; }
-  doc.text(`a importância de R$ ${data.amount.toFixed(2)} (${amountInWords(data.amount)})`, 20, y);
-  y += 8;
-  doc.text(`referente ao aluguel do mês de ${monthName}/${data.year}`, 20, y);
-  y += 8;
-  doc.text(`do imóvel situado em: ${data.address}${data.houseNumber ? `, Casa ${data.houseNumber}` : ""}`, 20, y);
-  y += 8;
-  doc.text(`Forma de pagamento: ${data.paymentMethod}`, 20, y);
-  y += 8;
-  doc.text(`Data: ${data.paymentDate}`, 20, y);
+  const bodyText = `Recebi de ${data.tenantName}, inscrito no CPF n° ${data.cpf || "___.___.___-__"}, o valor de R$ ${data.amount.toFixed(2)} (${amountInWords(data.amount)}), referente ao pagamento de aluguel do mês de ${monthName?.toLowerCase()}, do imóvel situado em ${data.address}${data.houseNumber ? `, Casa ${data.houseNumber}` : ""}.`;
 
-  y += 30;
-  doc.line(50, y, 160, y);
+  const lines = doc.splitTextToSize(bodyText, maxW);
+  doc.text(lines, margin, y);
+  y += lines.length * 6 + 8;
+
+  doc.text(`Forma de pagamento: ${data.paymentMethod}`, margin, y);
+  y += 20;
+
+  // Date
+  const dateObj = new Date(data.paymentDate + "T12:00:00");
+  const dateStr = `Fortaleza ${dateObj.getDate()} de ${MONTHS_PT[dateObj.getMonth()]?.toLowerCase()} de ${dateObj.getFullYear()}`;
+  doc.text(dateStr, pageWidth / 2, y, { align: "center" });
+  y += 25;
+
+  // Signature
+  try {
+    const sigImg = await loadImage(signatureSrc);
+    const sigW = 40;
+    const sigH = (sigImg.height / sigImg.width) * sigW;
+    doc.addImage(sigImg, "PNG", (pageWidth - sigW) / 2, y, sigW, sigH);
+    y += sigH + 3;
+  } catch {}
+
+  // Signature line
+  doc.line(pageWidth / 2 - 30, y, pageWidth / 2 + 30, y);
   y += 6;
-  doc.text("Assinatura do Locador", 105, y, { align: "center" });
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("Maria Eneide da Silva", pageWidth / 2, y, { align: "center" });
+  y += 5;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text("LOCADORA", pageWidth / 2, y, { align: "center" });
 
   return doc;
 }
