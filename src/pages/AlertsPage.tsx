@@ -6,9 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AlertTriangle, Clock, RefreshCw, XCircle, DollarSign, Bell, FileWarning, Eye } from "lucide-react";
+import { AlertTriangle, Clock, RefreshCw, XCircle, DollarSign, Bell, FileWarning, Eye, CalendarClock, CalendarX2, CalendarCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { differenceInDays, parseISO } from "date-fns";
+import { differenceInDays, parseISO, isToday } from "date-fns";
 import { toast } from "sonner";
 
 export default function AlertsPage() {
@@ -26,32 +26,35 @@ export default function AlertsPage() {
 
   const allTenants = [...(activeTenants || []), ...(formerTenants || [])];
 
-  const expiredContracts = allTenants.filter((t) => t.exit_date && parseISO(t.exit_date) < today);
-  const expiringContracts = (activeTenants || []).filter((t) => {
+  // Split expiring contracts: today, soon (1-15 days), approaching (16-30 days)
+  const expiringToday = (activeTenants || []).filter((t) => t.exit_date && isToday(parseISO(t.exit_date)));
+  const expiringSoon = (activeTenants || []).filter((t) => {
     if (!t.exit_date) return false;
     const d = differenceInDays(parseISO(t.exit_date), today);
-    return d >= 0 && d <= 30;
+    return d >= 1 && d <= 15;
   });
+  const expiringLater = (activeTenants || []).filter((t) => {
+    if (!t.exit_date) return false;
+    const d = differenceInDays(parseISO(t.exit_date), today);
+    return d >= 16 && d <= 30;
+  });
+  const expiredContracts = allTenants.filter((t) => t.exit_date && parseISO(t.exit_date) < today && !isToday(parseISO(t.exit_date)));
 
-  // Payment overdue alerts
+  // Payment overdue
   const overduePayments = (activeTenants || []).filter((t) => {
     const payment = allPayments?.find((p: any) => p.tenant_id === t.id && p.month === month);
-    if (payment?.status === "paid" || payment?.status === "deposit") return false;
+    if (payment?.status === "paid" || payment?.status === "paid_late" || payment?.status === "deposit") return false;
     return (t.payment_day || 10) < today.getDate();
   });
 
-  // No phone registered
   const noPhone = (activeTenants || []).filter((t) => !t.phone);
-
-  // No contract dates
   const noContractDates = (activeTenants || []).filter((t) => !t.entry_date || !t.exit_date);
 
   const openRenew = (tenant: any) => {
     setRenewTenant(tenant);
-    const nextYear = new Date();
     setRenewForm({
       entry_date: new Date().toISOString().split("T")[0],
-      exit_date: new Date(nextYear.getFullYear() + 1, nextYear.getMonth(), nextYear.getDate()).toISOString().split("T")[0],
+      exit_date: new Date(today.getFullYear() + 1, today.getMonth(), today.getDate()).toISOString().split("T")[0],
     });
     setRenewOpen(true);
   };
@@ -59,83 +62,80 @@ export default function AlertsPage() {
   const handleRenew = async () => {
     if (!renewTenant) return;
     try {
-      await updateTenant.mutateAsync({
-        id: renewTenant.id,
-        status: "active",
-        entry_date: renewForm.entry_date,
-        exit_date: renewForm.exit_date,
-      });
+      await updateTenant.mutateAsync({ id: renewTenant.id, status: "active", entry_date: renewForm.entry_date, exit_date: renewForm.exit_date });
       toast.success(`Contrato de ${renewTenant.name} renovado!`);
       setRenewOpen(false);
     } catch (e: any) { toast.error(e.message); }
   };
 
   const handleNotRenew = async (tenant: any) => {
-    if (!confirm(`Tem certeza que não deseja renovar o contrato de ${tenant.name}?`)) return;
+    if (!confirm(`Não renovar contrato de ${tenant.name}? Será movido para ex-inquilinos.`)) return;
     try {
       await updateTenant.mutateAsync({ id: tenant.id, status: "former" });
       toast.success(`${tenant.name} movido para ex-inquilinos.`);
     } catch (e: any) { toast.error(e.message); }
   };
 
-  const totalAlerts = expiredContracts.length + expiringContracts.length + overduePayments.length + noPhone.length + noContractDates.length;
+  const totalAlerts = expiredContracts.length + expiringToday.length + expiringSoon.length + expiringLater.length + overduePayments.length + noPhone.length + noContractDates.length;
+
+  const ContractCard = ({ t, badgeText, badgeClass, showDays }: { t: any; badgeText: string; badgeClass: string; showDays?: number }) => (
+    <Card key={t.id} className="hover:shadow-md transition-all">
+      <CardContent className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-foreground font-bold text-sm">{t.name.charAt(0)}</div>
+          <div>
+            <p className="font-semibold text-sm">{t.name}</p>
+            <p className="text-xs text-muted-foreground">{t.property?.address} - Casa {t.house_number}</p>
+            <p className="text-xs text-muted-foreground">{t.exit_date ? new Date(t.exit_date).toLocaleDateString("pt-BR") : ""}</p>
+            <div className="flex gap-1.5 mt-1">
+              <Badge className={`text-[10px] ${badgeClass}`}>{badgeText}</Badge>
+              {t.status === "former" && <Badge variant="secondary" className="text-[10px]">Ex-inquilino</Badge>}
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Button size="sm" variant="outline" onClick={() => navigate(`/tenants/${t.id}`)} className="rounded-lg"><Eye className="mr-1 h-3 w-3" />Perfil</Button>
+          <Button size="sm" onClick={() => openRenew(t)} className="rounded-lg bg-success hover:bg-success/90 text-success-foreground"><RefreshCw className="mr-1 h-3 w-3" />Renovar</Button>
+          <Button size="sm" variant="outline" className="rounded-lg text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => handleNotRenew(t)}><XCircle className="mr-1 h-3 w-3" />Não Renovar</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <Card className={`${expiredContracts.length > 0 ? "border-destructive/30 bg-destructive/5" : ""}`}>
-          <CardContent className="pt-4 pb-3 text-center">
-            <AlertTriangle className={`h-5 w-5 mx-auto mb-1 ${expiredContracts.length > 0 ? "text-destructive" : "text-muted-foreground"}`} />
-            <p className="text-xl font-bold">{expiredContracts.length}</p>
-            <p className="text-[10px] text-muted-foreground">Vencidos</p>
-          </CardContent>
-        </Card>
-        <Card className={`${expiringContracts.length > 0 ? "border-warning/30 bg-warning/5" : ""}`}>
-          <CardContent className="pt-4 pb-3 text-center">
-            <Clock className={`h-5 w-5 mx-auto mb-1 ${expiringContracts.length > 0 ? "text-warning" : "text-muted-foreground"}`} />
-            <p className="text-xl font-bold">{expiringContracts.length}</p>
-            <p className="text-[10px] text-muted-foreground">Vencendo</p>
-          </CardContent>
-        </Card>
-        <Card className={`${overduePayments.length > 0 ? "border-destructive/30 bg-destructive/5" : ""}`}>
-          <CardContent className="pt-4 pb-3 text-center">
-            <DollarSign className={`h-5 w-5 mx-auto mb-1 ${overduePayments.length > 0 ? "text-destructive" : "text-muted-foreground"}`} />
-            <p className="text-xl font-bold">{overduePayments.length}</p>
-            <p className="text-[10px] text-muted-foreground">Pag. Atrasado</p>
-          </CardContent>
-        </Card>
-        <Card className={`${noPhone.length > 0 ? "border-info/30 bg-info/5" : ""}`}>
-          <CardContent className="pt-4 pb-3 text-center">
-            <Bell className={`h-5 w-5 mx-auto mb-1 ${noPhone.length > 0 ? "text-info" : "text-muted-foreground"}`} />
-            <p className="text-xl font-bold">{noPhone.length}</p>
-            <p className="text-[10px] text-muted-foreground">Sem Telefone</p>
-          </CardContent>
-        </Card>
-        <Card className={`${noContractDates.length > 0 ? "border-warning/30 bg-warning/5" : ""}`}>
-          <CardContent className="pt-4 pb-3 text-center">
-            <FileWarning className={`h-5 w-5 mx-auto mb-1 ${noContractDates.length > 0 ? "text-warning" : "text-muted-foreground"}`} />
-            <p className="text-xl font-bold">{noContractDates.length}</p>
-            <p className="text-[10px] text-muted-foreground">Sem Datas</p>
-          </CardContent>
-        </Card>
+      {/* Summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+        {[
+          { count: overduePayments.length, label: "Pag. Atrasado", icon: DollarSign, active: overduePayments.length > 0, color: "destructive" },
+          { count: expiringToday.length, label: "Vence Hoje", icon: CalendarX2, active: expiringToday.length > 0, color: "destructive" },
+          { count: expiringSoon.length, label: "Vence 1-15d", icon: CalendarClock, active: expiringSoon.length > 0, color: "warning" },
+          { count: expiringLater.length, label: "Vence 16-30d", icon: CalendarCheck, active: expiringLater.length > 0, color: "primary" },
+          { count: expiredContracts.length, label: "Vencidos", icon: AlertTriangle, active: expiredContracts.length > 0, color: "destructive" },
+          { count: noPhone.length, label: "Sem Telefone", icon: Bell, active: noPhone.length > 0, color: "info" },
+          { count: noContractDates.length, label: "Sem Datas", icon: FileWarning, active: noContractDates.length > 0, color: "warning" },
+        ].map((item, i) => (
+          <Card key={i} className={item.active ? `border-${item.color}/30 bg-${item.color}/5` : ""}>
+            <CardContent className="pt-4 pb-3 text-center">
+              <item.icon className={`h-5 w-5 mx-auto mb-1 ${item.active ? `text-${item.color}` : "text-muted-foreground"}`} />
+              <p className="text-xl font-bold">{item.count}</p>
+              <p className="text-[10px] text-muted-foreground">{item.label}</p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      {/* Overdue Payments */}
+      {/* Payment Overdue */}
       {overduePayments.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-base font-semibold flex items-center gap-2">
-            <DollarSign className="h-5 w-5 text-destructive" />Pagamentos em Atraso
-          </h2>
+          <h2 className="text-base font-semibold flex items-center gap-2"><DollarSign className="h-5 w-5 text-destructive" />Pagamentos em Atraso</h2>
           {overduePayments.map((t) => {
             const daysLate = today.getDate() - (t.payment_day || 10);
             return (
               <Card key={t.id} className="border-destructive/20 hover:shadow-md transition-all">
                 <CardContent className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-destructive/10 text-destructive font-bold text-sm">
-                      {t.name.charAt(0)}
-                    </div>
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-destructive/10 text-destructive font-bold text-sm">{t.name.charAt(0)}</div>
                     <div>
                       <p className="font-semibold text-sm">{t.name}</p>
                       <p className="text-xs text-muted-foreground">{t.property?.address} - Casa {t.house_number}</p>
@@ -145,9 +145,7 @@ export default function AlertsPage() {
                       </div>
                     </div>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => navigate(`/tenants/${t.id}`)}>
-                    <Eye className="mr-1 h-3 w-3" />Ver perfil
-                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => navigate(`/tenants/${t.id}`)} className="rounded-lg"><Eye className="mr-1 h-3 w-3" />Ver perfil</Button>
                 </CardContent>
               </Card>
             );
@@ -155,117 +153,64 @@ export default function AlertsPage() {
         </div>
       )}
 
-      {/* Expired Contracts */}
+      {/* Expiring Today */}
+      {expiringToday.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-base font-semibold flex items-center gap-2"><CalendarX2 className="h-5 w-5 text-destructive" />Vence Hoje!</h2>
+          {expiringToday.map((t) => <ContractCard key={t.id} t={t} badgeText="Vence HOJE" badgeClass="bg-destructive text-destructive-foreground" />)}
+        </div>
+      )}
+
+      {/* Expiring 1-15 days */}
+      {expiringSoon.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-base font-semibold flex items-center gap-2"><CalendarClock className="h-5 w-5 text-warning" />Vence em até 15 dias</h2>
+          {expiringSoon.map((t) => {
+            const days = differenceInDays(parseISO(t.exit_date!), today);
+            return <ContractCard key={t.id} t={t} badgeText={`Faltam ${days} dias`} badgeClass="bg-warning text-warning-foreground" />;
+          })}
+        </div>
+      )}
+
+      {/* Expiring 16-30 days */}
+      {expiringLater.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-base font-semibold flex items-center gap-2"><CalendarCheck className="h-5 w-5 text-primary" />Vence em 16-30 dias</h2>
+          {expiringLater.map((t) => {
+            const days = differenceInDays(parseISO(t.exit_date!), today);
+            return <ContractCard key={t.id} t={t} badgeText={`Faltam ${days} dias`} badgeClass="bg-primary/10 text-primary border-primary/30" />;
+          })}
+        </div>
+      )}
+
+      {/* Expired */}
       {expiredContracts.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-base font-semibold flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-destructive" />Contratos Vencidos
-          </h2>
+          <h2 className="text-base font-semibold flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-destructive" />Contratos Vencidos</h2>
           {expiredContracts.map((t) => {
             const days = differenceInDays(today, parseISO(t.exit_date!));
-            return (
-              <Card key={t.id} className="border-destructive/20 hover:shadow-md transition-all">
-                <CardContent className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-destructive/10 text-destructive font-bold text-sm">
-                      {t.name.charAt(0)}
-                    </div>
-                    <div>
-                      <p className="font-semibold text-sm">{t.name}</p>
-                      <p className="text-xs text-muted-foreground">{t.property?.address} - Casa {t.house_number}</p>
-                      <p className="text-xs text-muted-foreground">Venceu: {new Date(t.exit_date!).toLocaleDateString("pt-BR")}</p>
-                      <div className="flex gap-1.5 mt-1">
-                        <Badge variant="destructive" className="text-[10px]">Há {days} dias</Badge>
-                        {t.status === "former" && <Badge variant="secondary" className="text-[10px]">Ex-inquilino</Badge>}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={() => openRenew(t)} className="bg-success hover:bg-success/90 text-success-foreground">
-                      <RefreshCw className="mr-1 h-3 w-3" />Renovar
-                    </Button>
-                    <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => handleNotRenew(t)}>
-                      <XCircle className="mr-1 h-3 w-3" />Não Renovar
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
+            return <ContractCard key={t.id} t={t} badgeText={`Vencido há ${days} dias`} badgeClass="bg-destructive text-destructive-foreground" />;
           })}
         </div>
       )}
 
-      {/* Expiring Contracts */}
-      {expiringContracts.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-base font-semibold flex items-center gap-2">
-            <Clock className="h-5 w-5 text-warning" />Próximos do Vencimento
-          </h2>
-          {expiringContracts.map((t) => {
-            const days = differenceInDays(parseISO(t.exit_date!), today);
-            return (
-              <Card key={t.id} className="border-warning/20 hover:shadow-md transition-all">
-                <CardContent className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-warning/10 text-warning font-bold text-sm">
-                      {t.name.charAt(0)}
-                    </div>
-                    <div>
-                      <p className="font-semibold text-sm">{t.name}</p>
-                      <p className="text-xs text-muted-foreground">{t.property?.address} - Casa {t.house_number}</p>
-                      <p className="text-xs text-muted-foreground">Vence: {new Date(t.exit_date!).toLocaleDateString("pt-BR")}</p>
-                      <Badge className="mt-1 bg-warning text-warning-foreground text-[10px]">Faltam {days} dias</Badge>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={() => navigate(`/tenants/${t.id}`)}>
-                      <Eye className="mr-1 h-3 w-3" />Ver perfil
-                    </Button>
-                    <Button size="sm" onClick={() => openRenew(t)} className="bg-success hover:bg-success/90 text-success-foreground">
-                      <RefreshCw className="mr-1 h-3 w-3" />Renovar
-                    </Button>
-                    <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => handleNotRenew(t)}>
-                      <XCircle className="mr-1 h-3 w-3" />Não Renovar
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Admin warnings */}
+      {/* Admin Warnings */}
       {(noPhone.length > 0 || noContractDates.length > 0) && (
         <div className="space-y-3">
-          <h2 className="text-base font-semibold flex items-center gap-2">
-            <Bell className="h-5 w-5 text-primary" />Avisos Administrativos
-          </h2>
+          <h2 className="text-base font-semibold flex items-center gap-2"><Bell className="h-5 w-5 text-primary" />Avisos Administrativos</h2>
           {noPhone.length > 0 && (
             <Card className="border-primary/20">
               <CardContent className="pt-4">
-                <p className="text-sm font-medium mb-2">📱 Inquilinos sem telefone cadastrado:</p>
-                <div className="flex flex-wrap gap-2">
-                  {noPhone.map((t) => (
-                    <Badge key={t.id} variant="outline" className="cursor-pointer hover:bg-primary/10" onClick={() => navigate(`/tenants/${t.id}`)}>
-                      {t.name}
-                    </Badge>
-                  ))}
-                </div>
+                <p className="text-sm font-medium mb-2">📱 Sem telefone cadastrado:</p>
+                <div className="flex flex-wrap gap-2">{noPhone.map((t) => (<Badge key={t.id} variant="outline" className="cursor-pointer hover:bg-primary/10" onClick={() => navigate(`/tenants/${t.id}`)}>{t.name}</Badge>))}</div>
               </CardContent>
             </Card>
           )}
           {noContractDates.length > 0 && (
             <Card className="border-warning/20">
               <CardContent className="pt-4">
-                <p className="text-sm font-medium mb-2">📋 Inquilinos sem datas de contrato:</p>
-                <div className="flex flex-wrap gap-2">
-                  {noContractDates.map((t) => (
-                    <Badge key={t.id} variant="outline" className="cursor-pointer hover:bg-warning/10" onClick={() => navigate(`/tenants/${t.id}`)}>
-                      {t.name}
-                    </Badge>
-                  ))}
-                </div>
+                <p className="text-sm font-medium mb-2">📋 Sem datas de contrato:</p>
+                <div className="flex flex-wrap gap-2">{noContractDates.map((t) => (<Badge key={t.id} variant="outline" className="cursor-pointer hover:bg-warning/10" onClick={() => navigate(`/tenants/${t.id}`)}>{t.name}</Badge>))}</div>
               </CardContent>
             </Card>
           )}
@@ -276,33 +221,22 @@ export default function AlertsPage() {
         <Card><CardContent className="py-12 text-center">
           <div className="text-4xl mb-3">✅</div>
           <p className="text-muted-foreground font-medium">Nenhum alerta no momento!</p>
-          <p className="text-xs text-muted-foreground mt-1">Tudo está em dia.</p>
         </CardContent></Card>
       )}
 
+      {/* Renew Dialog */}
       <Dialog open={renewOpen} onOpenChange={setRenewOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RefreshCw className="h-5 w-5 text-success" />Renovar Contrato
-            </DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><RefreshCw className="h-5 w-5 text-success" />Renovar Contrato</DialogTitle></DialogHeader>
           {renewTenant && (
             <div className="space-y-4">
               <div className="p-3 rounded-lg bg-muted/50">
                 <p className="font-semibold">{renewTenant.name}</p>
                 <p className="text-sm text-muted-foreground">{renewTenant.property?.address} - Casa {renewTenant.house_number}</p>
-                <p className="text-sm text-muted-foreground">Aluguel: R$ {Number(renewTenant.rent_amount).toFixed(2)}</p>
               </div>
-              <div>
-                <Label>Data de Renovação (Início)</Label>
-                <Input type="date" value={renewForm.entry_date} onChange={(e) => setRenewForm({ ...renewForm, entry_date: e.target.value })} />
-              </div>
-              <div>
-                <Label>Data de Vencimento do Contrato</Label>
-                <Input type="date" value={renewForm.exit_date} onChange={(e) => setRenewForm({ ...renewForm, exit_date: e.target.value })} />
-              </div>
-              <Button className="w-full bg-success hover:bg-success/90 text-success-foreground" onClick={handleRenew} disabled={updateTenant.isPending}>
+              <div><Label>Início</Label><Input type="date" value={renewForm.entry_date} onChange={(e) => setRenewForm({ ...renewForm, entry_date: e.target.value })} /></div>
+              <div><Label>Vencimento</Label><Input type="date" value={renewForm.exit_date} onChange={(e) => setRenewForm({ ...renewForm, exit_date: e.target.value })} /></div>
+              <Button className="w-full rounded-xl bg-success hover:bg-success/90 text-success-foreground" onClick={handleRenew} disabled={updateTenant.isPending}>
                 {updateTenant.isPending ? "Renovando..." : "Confirmar Renovação"}
               </Button>
             </div>

@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ArrowLeft, Edit, MessageCircle, Receipt, UserX, Upload, FileText, ExternalLink, Phone, DollarSign, Calendar, MapPin, User, TrendingUp, TrendingDown, AlertTriangle, StickyNote } from "lucide-react";
+import { ArrowLeft, Edit, MessageCircle, Receipt, UserX, Upload, FileText, ExternalLink, Phone, DollarSign, Calendar, MapPin, User, TrendingUp, TrendingDown, AlertTriangle, StickyNote, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { openWhatsApp, openWhatsAppChat, getMessageTemplates } from "@/lib/whatsapp";
 import { generateReceipt } from "@/lib/receipt-generator";
@@ -18,6 +18,15 @@ import { extractSupabaseStoragePath, isAbsoluteHttpUrl } from "@/lib/document-ur
 import { supabase } from "@/integrations/supabase/client";
 
 const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+type PaymentStatusType = "paid" | "paid_late" | "pending" | "deposit";
+
+const STATUS_CONFIG: Record<string, { label: string; colorClass: string; icon: any }> = {
+  paid: { label: "Em dia", colorClass: "bg-success/10 text-success border-success/30", icon: CheckCircle2 },
+  paid_late: { label: "Atrasado", colorClass: "bg-warning/10 text-warning border-warning/30", icon: Clock },
+  pending: { label: "Pend.", colorClass: "bg-destructive/10 text-destructive border-destructive/30", icon: XCircle },
+  deposit: { label: "Caução", colorClass: "bg-primary/10 text-primary border-primary/30", icon: DollarSign },
+};
 
 export default function TenantProfilePage() {
   const { id } = useParams<{ id: string }>();
@@ -36,6 +45,19 @@ export default function TenantProfilePage() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [notesValue, setNotesValue] = useState("");
 
+  // Payment dialog state
+  const [payDialogOpen, setPayDialogOpen] = useState(false);
+  const [payMonth, setPayMonth] = useState(0);
+  const [payStatus, setPayStatus] = useState<PaymentStatusType>("paid");
+  const [payLateFee, setPayLateFee] = useState("2");
+  const [payInterest, setPayInterest] = useState("1");
+  const [payCustomAmount, setPayCustomAmount] = useState("");
+  const [payDate, setPayDate] = useState(new Date().toISOString().split("T")[0]);
+
+  // Payment detail view
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailMonth, setDetailMonth] = useState(0);
+
   const now = new Date();
   const month = now.getMonth() + 1;
 
@@ -46,39 +68,88 @@ export default function TenantProfilePage() {
   );
   if (!tenant) return <p className="p-6">Inquilino não encontrado.</p>;
 
+  const rentAmount = Number(tenant.rent_amount);
+
+  // Summary stats
+  const totalPaidYear = payments?.filter((p) => p.status === "paid" || p.status === "paid_late").reduce((sum, p) => sum + Number(p.amount || rentAmount), 0) || 0;
+  const totalPendingYear = payments?.filter((p) => p.status === "pending").length || 0;
+  const paidMonths = payments?.filter((p) => p.status === "paid" || p.status === "paid_late").length || 0;
+  const lastPayment = payments?.filter((p) => p.status === "paid" || p.status === "paid_late").sort((a, b) => (b.paid_at || "").localeCompare(a.paid_at || ""))[0];
+
   // Payment pattern
   const getPaymentPattern = () => {
     if (!allPayments) return null;
-    const recentPayments: boolean[] = [];
+    const recentPayments: string[] = [];
     for (let m = month - 1; m >= Math.max(1, month - 6); m--) {
       const p = allPayments.find((pay: any) => pay.tenant_id === id && pay.month === m);
-      recentPayments.push(p?.status === "paid");
+      if (p) recentPayments.push(p.status);
     }
-    const paidCount = recentPayments.filter(Boolean).length;
+    const paidOnTime = recentPayments.filter((s) => s === "paid").length;
+    const paidLate = recentPayments.filter((s) => s === "paid_late").length;
     const total = recentPayments.length;
     if (total === 0) return null;
-    const ratio = paidCount / total;
-    if (ratio >= 0.8) return { label: "Paga e mora", icon: TrendingUp, colorClass: "bg-success/10 text-success border-success/30", desc: "Costuma pagar em dia, atraso pontual" };
-    if (ratio <= 0.3) return { label: "Mora e paga", icon: TrendingDown, colorClass: "bg-destructive/10 text-destructive border-destructive/30", desc: "Atrasos frequentes" };
+    const ratio = (paidOnTime + paidLate) / total;
+    if (ratio >= 0.8 && paidLate <= 1) return { label: "Bom pagador", icon: TrendingUp, colorClass: "bg-success/10 text-success border-success/30", desc: "Costuma pagar em dia" };
+    if (paidLate > paidOnTime) return { label: "Paga com atraso", icon: TrendingDown, colorClass: "bg-warning/10 text-warning border-warning/30", desc: "Paga, mas frequentemente atrasado" };
+    if (ratio <= 0.3) return { label: "Inadimplente", icon: AlertTriangle, colorClass: "bg-destructive/10 text-destructive border-destructive/30", desc: "Atrasos frequentes" };
     return { label: "Irregular", icon: AlertTriangle, colorClass: "bg-warning/10 text-warning border-warning/30", desc: "Pagamento instável" };
   };
 
   const pattern = getPaymentPattern();
 
-  const getPaymentStatus = (m: number) => {
-    return payments?.find((p) => p.month === m)?.status || "pending";
+  const getPayment = (m: number) => payments?.find((p) => p.month === m);
+  const getPaymentStatus = (m: number) => getPayment(m)?.status || "pending";
+
+  // Calculate late fee amount
+  const calcFinalAmount = () => {
+    if (payStatus === "paid") return payCustomAmount ? Number(payCustomAmount) : rentAmount;
+    const feePercent = Number(payLateFee) || 0;
+    const intPercent = Number(payInterest) || 0;
+    const base = payCustomAmount ? Number(payCustomAmount) : rentAmount;
+    return base + base * (feePercent / 100) + base * (intPercent / 100);
   };
 
-  const togglePayment = async (m: number) => {
-    const current = getPaymentStatus(m);
-    const newStatus = current === "paid" ? "pending" : "paid";
+  const openPayDialog = (m: number) => {
+    const existing = getPayment(m);
+    setPayMonth(m);
+    setPayStatus(existing?.status === "paid" || existing?.status === "paid_late" ? "pending" : "paid");
+    setPayLateFee(String(existing?.late_fee_percent ?? 2));
+    setPayInterest(String(existing?.interest_percent ?? 1));
+    setPayCustomAmount("");
+    setPayDate(existing?.paid_at || new Date().toISOString().split("T")[0]);
+
+    // If already paid, ask to revert
+    if (existing?.status === "paid" || existing?.status === "paid_late") {
+      if (confirm(`${MONTHS[m - 1]} está marcado como pago. Deseja reverter para pendente?`)) {
+        upsertPayment.mutateAsync({
+          tenant_id: id!, month: m, year, status: "pending",
+          amount: rentAmount, paid_at: null, late_fee_percent: 0, interest_percent: 0,
+        }).then(() => toast.success("Revertido para pendente.")).catch((e: any) => toast.error(e.message));
+      }
+      return;
+    }
+
+    setPayDialogOpen(true);
+  };
+
+  const openPayDetail = (m: number) => {
+    setDetailMonth(m);
+    setDetailOpen(true);
+  };
+
+  const confirmPayment = async () => {
+    const finalAmount = calcFinalAmount();
     try {
       await upsertPayment.mutateAsync({
-        tenant_id: id!, month: m, year, status: newStatus,
-        amount: Number(tenant.rent_amount),
-        paid_at: newStatus === "paid" ? new Date().toISOString().split("T")[0] : null,
+        tenant_id: id!, month: payMonth, year,
+        status: payStatus === "paid_late" ? "paid_late" : "paid",
+        amount: finalAmount,
+        paid_at: payDate,
+        late_fee_percent: payStatus === "paid_late" ? Number(payLateFee) : 0,
+        interest_percent: payStatus === "paid_late" ? Number(payInterest) : 0,
       });
-      toast.success(newStatus === "paid" ? "Marcado como pago!" : "Marcado como pendente.");
+      toast.success(`${MONTHS[payMonth - 1]} marcado como ${payStatus === "paid_late" ? "pago com atraso" : "pago em dia"}!`);
+      setPayDialogOpen(false);
     } catch (e: any) { toast.error(e.message); }
   };
 
@@ -133,12 +204,27 @@ export default function TenantProfilePage() {
   const sendWhatsApp = () => {
     if (!tenant.phone) { toast.error("Telefone não cadastrado."); return; }
     const templates = getMessageTemplates({
-      name: tenant.name, amount: Number(tenant.rent_amount),
-      month: new Date().getMonth() + 1, year: currentYear,
+      name: tenant.name, amount: rentAmount,
+      month: month, year: currentYear,
       property: tenant.property?.address || "", houseNumber: tenant.house_number || "",
       dueDay: tenant.payment_day || 10,
     });
     openWhatsApp({ phone: tenant.phone, message: templates.reminder });
+  };
+
+  const sendOverdueWhatsApp = () => {
+    if (!tenant.phone) { toast.error("Telefone não cadastrado."); return; }
+    const fee = rentAmount * 0.02;
+    const interest = rentAmount * 0.01;
+    const total = rentAmount + fee + interest;
+    const templates = getMessageTemplates({
+      name: tenant.name, amount: rentAmount,
+      month, year: currentYear,
+      property: tenant.property?.address || "", houseNumber: tenant.house_number || "",
+      dueDay: tenant.payment_day || 10,
+      lateFee: 2, interest: 1, totalWithFees: total,
+    });
+    openWhatsApp({ phone: tenant.phone, message: templates.overdue });
   };
 
   const openWhatsAppDirect = () => {
@@ -147,15 +233,15 @@ export default function TenantProfilePage() {
   };
 
   const handleReceipt = async (m: number) => {
+    const payment = getPayment(m);
     const doc = await generateReceipt({
       tenantName: tenant.name,
       cpf: tenant.cpf || undefined,
       address: tenant.property?.address || "",
       houseNumber: tenant.house_number || undefined,
-      amount: Number(tenant.rent_amount),
-      month: m,
-      year,
-      paymentDate: new Date().toISOString().split("T")[0],
+      amount: Number(payment?.amount || rentAmount),
+      month: m, year,
+      paymentDate: payment?.paid_at || new Date().toISOString().split("T")[0],
       paymentMethod: "Pix",
       receiptNumber: `REC-${year}-${String(m).padStart(2, "0")}-${tenant.id.slice(0, 6).toUpperCase()}`,
       signatureName: "LOCADOR",
@@ -185,6 +271,9 @@ export default function TenantProfilePage() {
     if (isAbsoluteHttpUrl(doc.file_url || "")) { window.open(doc.file_url, "_blank", "noopener,noreferrer"); return; }
     toast.error("Erro ao abrir documento.");
   };
+
+  const detailPayment = getPayment(detailMonth);
+  const detailConfig = STATUS_CONFIG[detailPayment?.status || "pending"];
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -217,23 +306,14 @@ export default function TenantProfilePage() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" onClick={handleEdit} className="rounded-lg">
-                <Edit className="mr-1 h-4 w-4" />Editar
-              </Button>
-              <Button variant="outline" size="sm" onClick={openNotesDialog} className="rounded-lg">
-                <StickyNote className="mr-1 h-4 w-4" />OBS
-              </Button>
-              <Button variant="outline" size="sm" onClick={sendWhatsApp} className="rounded-lg">
-                <MessageCircle className="mr-1 h-4 w-4" />WhatsApp
-              </Button>
+              <Button variant="outline" size="sm" onClick={handleEdit} className="rounded-lg"><Edit className="mr-1 h-4 w-4" />Editar</Button>
+              <Button variant="outline" size="sm" onClick={openNotesDialog} className="rounded-lg"><StickyNote className="mr-1 h-4 w-4" />OBS</Button>
+              <Button variant="outline" size="sm" onClick={sendWhatsApp} className="rounded-lg"><MessageCircle className="mr-1 h-4 w-4" />Lembrete</Button>
+              <Button variant="outline" size="sm" onClick={sendOverdueWhatsApp} className="rounded-lg text-destructive border-destructive/30 hover:bg-destructive/10"><MessageCircle className="mr-1 h-4 w-4" />Cobrar</Button>
               {tenant.phone && (
-                <Button variant="outline" size="sm" onClick={openWhatsAppDirect} className="rounded-lg">
-                  <Phone className="mr-1 h-4 w-4" />Chat
-                </Button>
+                <Button variant="outline" size="sm" onClick={openWhatsAppDirect} className="rounded-lg"><Phone className="mr-1 h-4 w-4" />Chat</Button>
               )}
-              <Button variant="outline" size="sm" onClick={moveToFormer} className="rounded-lg text-destructive hover:bg-destructive/10">
-                <UserX className="mr-1 h-4 w-4" />Ex-inquilino
-              </Button>
+              <Button variant="outline" size="sm" onClick={moveToFormer} className="rounded-lg text-destructive hover:bg-destructive/10"><UserX className="mr-1 h-4 w-4" />Ex-inquilino</Button>
               <label>
                 <Button variant="outline" size="sm" asChild className="rounded-lg"><span><Upload className="mr-1 h-4 w-4" />Contrato</span></Button>
                 <input type="file" accept=".pdf,.jpg,.png,.doc,.docx" className="hidden" onChange={handleUpload} />
@@ -243,10 +323,42 @@ export default function TenantProfilePage() {
         </CardContent>
       </Card>
 
+      {/* Summary Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card className="border-success/20">
+          <CardContent className="pt-4 pb-3 text-center">
+            <DollarSign className="h-5 w-5 mx-auto mb-1 text-success" />
+            <p className="text-lg font-bold text-success">R$ {totalPaidYear.toFixed(2)}</p>
+            <p className="text-[10px] text-muted-foreground">Pago em {year}</p>
+          </CardContent>
+        </Card>
+        <Card className={totalPendingYear > 0 ? "border-destructive/20" : ""}>
+          <CardContent className="pt-4 pb-3 text-center">
+            <AlertTriangle className={`h-5 w-5 mx-auto mb-1 ${totalPendingYear > 0 ? "text-destructive" : "text-muted-foreground"}`} />
+            <p className="text-lg font-bold">{totalPendingYear}</p>
+            <p className="text-[10px] text-muted-foreground">Meses pendentes</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3 text-center">
+            <CheckCircle2 className="h-5 w-5 mx-auto mb-1 text-primary" />
+            <p className="text-lg font-bold">{paidMonths}/{12}</p>
+            <p className="text-[10px] text-muted-foreground">Meses pagos</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3 text-center">
+            <Calendar className="h-5 w-5 mx-auto mb-1 text-muted-foreground" />
+            <p className="text-sm font-bold">{lastPayment?.paid_at ? new Date(lastPayment.paid_at + "T12:00:00").toLocaleDateString("pt-BR") : "—"}</p>
+            <p className="text-[10px] text-muted-foreground">Último pagamento</p>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Info Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { icon: DollarSign, label: "Aluguel", value: `R$ ${Number(tenant.rent_amount).toFixed(2)}`, colorClass: "text-success" },
+          { icon: DollarSign, label: "Aluguel", value: `R$ ${rentAmount.toFixed(2)}`, colorClass: "text-success" },
           { icon: DollarSign, label: "Caução", value: `R$ ${Number(tenant.deposit || 0).toFixed(2)}`, colorClass: "text-primary" },
           { icon: Calendar, label: "Vencimento", value: `Dia ${tenant.payment_day}`, colorClass: "text-primary" },
           { icon: Calendar, label: "Entrada", value: tenant.entry_date ? new Date(tenant.entry_date).toLocaleDateString("pt-BR") : "—", colorClass: "text-muted-foreground" },
@@ -269,9 +381,7 @@ export default function TenantProfilePage() {
           {tenant.phone && (
             <Card className="cursor-pointer hover:shadow-md transition-all" onClick={openWhatsAppDirect}>
               <CardContent className="pt-4 pb-3 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success/10 text-success">
-                  <Phone className="h-5 w-5" />
-                </div>
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success/10 text-success"><Phone className="h-5 w-5" /></div>
                 <div>
                   <p className="text-xs text-muted-foreground">Telefone / WhatsApp</p>
                   <p className="text-sm font-semibold text-primary">{tenant.phone} <ExternalLink className="inline h-3 w-3" /></p>
@@ -282,9 +392,7 @@ export default function TenantProfilePage() {
           {tenant.property && (
             <Card>
               <CardContent className="pt-4 pb-3 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <MapPin className="h-5 w-5" />
-                </div>
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><MapPin className="h-5 w-5" /></div>
                 <div>
                   <p className="text-xs text-muted-foreground">Condomínio</p>
                   <p className="text-sm font-semibold">{tenant.property.name || tenant.property.address}</p>
@@ -295,14 +403,12 @@ export default function TenantProfilePage() {
         </div>
       )}
 
-      {/* Notes Section */}
+      {/* Notes */}
       {tenant.notes && (
         <Card className="border-primary/20">
           <CardContent className="pt-4 pb-3">
             <div className="flex items-start gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
-                <StickyNote className="h-4 w-4" />
-              </div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0"><StickyNote className="h-4 w-4" /></div>
               <div>
                 <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mb-1">Observações</p>
                 <p className="text-sm text-foreground/80 whitespace-pre-wrap">{tenant.notes}</p>
@@ -316,9 +422,7 @@ export default function TenantProfilePage() {
       {documents && documents.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <FileText className="h-5 w-5 text-primary" />Documentos / Contratos
-            </CardTitle>
+            <CardTitle className="text-base flex items-center gap-2"><FileText className="h-5 w-5 text-primary" />Documentos / Contratos</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
@@ -331,9 +435,7 @@ export default function TenantProfilePage() {
                       <p className="text-xs text-muted-foreground">{new Date(doc.created_at).toLocaleDateString("pt-BR")}</p>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => downloadDocument(doc)} className="rounded-lg">
-                    <ExternalLink className="mr-1 h-3 w-3" />Abrir
-                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => downloadDocument(doc)} className="rounded-lg"><ExternalLink className="mr-1 h-3 w-3" />Abrir</Button>
                 </div>
               ))}
             </div>
@@ -341,7 +443,7 @@ export default function TenantProfilePage() {
         </Card>
       )}
 
-      {/* Payments */}
+      {/* Payments History */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <CardTitle className="text-base">Histórico de Pagamentos</CardTitle>
@@ -355,20 +457,29 @@ export default function TenantProfilePage() {
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-12 gap-2">
             {MONTHS.map((m, i) => {
               const status = getPaymentStatus(i + 1);
+              const payment = getPayment(i + 1);
+              const config = STATUS_CONFIG[status] || STATUS_CONFIG.pending;
+              const StatusIcon = config.icon;
               return (
                 <div key={m} className="text-center space-y-1">
                   <p className="text-xs font-medium text-muted-foreground">{m}</p>
                   <Button
                     variant="outline" size="sm"
-                    className={`w-full text-xs rounded-lg ${status === "paid" ? "bg-success/10 text-success border-success/30 hover:bg-success/20" : status === "deposit" ? "bg-primary/10 text-primary border-primary/30 hover:bg-primary/20" : "bg-destructive/10 text-destructive border-destructive/30 hover:bg-destructive/20"}`}
-                    onClick={() => togglePayment(i + 1)}
+                    className={`w-full text-[10px] rounded-lg ${config.colorClass} hover:opacity-80`}
+                    onClick={() => openPayDialog(i + 1)}
                   >
-                    {status === "paid" ? "✓ Pago" : status === "deposit" ? "Caução" : "Pend."}
+                    <StatusIcon className="h-3 w-3 mr-0.5" />
+                    {config.label}
                   </Button>
-                  {status === "paid" && (
-                    <Button variant="ghost" size="sm" className="w-full text-xs p-0 h-6 rounded-lg" onClick={() => handleReceipt(i + 1)}>
-                      <Receipt className="h-3 w-3" />
-                    </Button>
+                  {payment && (payment.status === "paid" || payment.status === "paid_late") && (
+                    <div className="space-y-0.5">
+                      <button className="text-[9px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer w-full" onClick={() => openPayDetail(i + 1)}>
+                        R$ {Number(payment.amount || rentAmount).toFixed(2)}
+                      </button>
+                      <Button variant="ghost" size="sm" className="w-full text-xs p-0 h-5 rounded-lg" onClick={() => handleReceipt(i + 1)}>
+                        <Receipt className="h-3 w-3" />
+                      </Button>
+                    </div>
                   )}
                 </div>
               );
@@ -376,6 +487,118 @@ export default function TenantProfilePage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Payment Dialog */}
+      <Dialog open={payDialogOpen} onOpenChange={setPayDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <DollarSign className="h-5 w-5 text-primary" />
+              Registrar Pagamento — {MONTHS[payMonth - 1]}/{year}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-muted/50">
+              <p className="font-semibold text-sm">{tenant.name}</p>
+              <p className="text-xs text-muted-foreground">Aluguel: R$ {rentAmount.toFixed(2)} · Vencimento: Dia {tenant.payment_day}</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="font-semibold">Status do pagamento</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant={payStatus === "paid" ? "default" : "outline"}
+                  className={`rounded-lg ${payStatus === "paid" ? "bg-success hover:bg-success/90 text-success-foreground" : ""}`}
+                  onClick={() => setPayStatus("paid")}
+                >
+                  <CheckCircle2 className="mr-1 h-4 w-4" />Pago em dia
+                </Button>
+                <Button
+                  variant={payStatus === "paid_late" ? "default" : "outline"}
+                  className={`rounded-lg ${payStatus === "paid_late" ? "bg-warning hover:bg-warning/90 text-warning-foreground" : ""}`}
+                  onClick={() => setPayStatus("paid_late")}
+                >
+                  <Clock className="mr-1 h-4 w-4" />Pago em atraso
+                </Button>
+              </div>
+            </div>
+
+            <div>
+              <Label>Data do pagamento</Label>
+              <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+            </div>
+
+            {payStatus === "paid_late" && (
+              <div className="space-y-3 p-3 rounded-lg border border-warning/30 bg-warning/5">
+                <p className="text-sm font-semibold text-warning">Multa e Juros</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs">Multa (%)</Label>
+                    <Input type="number" step="0.1" value={payLateFee} onChange={(e) => setPayLateFee(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Juros (%)</Label>
+                    <Input type="number" step="0.1" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} />
+                  </div>
+                </div>
+                <div className="text-sm space-y-1">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Original:</span><span>R$ {rentAmount.toFixed(2)}</span></div>
+                  <div className="flex justify-between text-warning"><span>Multa ({payLateFee}%):</span><span>R$ {(rentAmount * (Number(payLateFee) / 100)).toFixed(2)}</span></div>
+                  <div className="flex justify-between text-warning"><span>Juros ({payInterest}%):</span><span>R$ {(rentAmount * (Number(payInterest) / 100)).toFixed(2)}</span></div>
+                  <div className="flex justify-between font-bold border-t pt-1 mt-1"><span>Total:</span><span>R$ {calcFinalAmount().toFixed(2)}</span></div>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Label>Valor pago (opcional, se diferente)</Label>
+              <Input type="number" step="0.01" placeholder={calcFinalAmount().toFixed(2)} value={payCustomAmount} onChange={(e) => setPayCustomAmount(e.target.value)} />
+            </div>
+
+            <Button className="w-full rounded-xl bg-success hover:bg-success/90 text-success-foreground" onClick={confirmPayment} disabled={upsertPayment.isPending}>
+              {upsertPayment.isPending ? "Salvando..." : `Confirmar — R$ ${calcFinalAmount().toFixed(2)}`}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payment Detail Dialog */}
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Detalhes — {MONTHS[detailMonth - 1]}/{year}</DialogTitle>
+          </DialogHeader>
+          {detailPayment ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className={detailConfig.colorClass}>
+                  <detailConfig.icon className="h-3 w-3 mr-1" />{detailConfig.label}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div><span className="text-muted-foreground">Valor pago:</span><p className="font-semibold">R$ {Number(detailPayment.amount || rentAmount).toFixed(2)}</p></div>
+                <div><span className="text-muted-foreground">Data:</span><p className="font-semibold">{detailPayment.paid_at ? new Date(detailPayment.paid_at + "T12:00:00").toLocaleDateString("pt-BR") : "—"}</p></div>
+                {detailPayment.status === "paid_late" && (
+                  <>
+                    <div><span className="text-muted-foreground">Multa:</span><p className="font-semibold text-warning">{detailPayment.late_fee_percent}%</p></div>
+                    <div><span className="text-muted-foreground">Juros:</span><p className="font-semibold text-warning">{detailPayment.interest_percent}%</p></div>
+                  </>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" className="rounded-lg" onClick={() => { setDetailOpen(false); openPayDialog(detailMonth); }}>
+                  <Edit className="mr-1 h-3 w-3" />Editar pagamento
+                </Button>
+                <Button variant="outline" size="sm" className="rounded-lg" onClick={() => handleReceipt(detailMonth)}>
+                  <Receipt className="mr-1 h-3 w-3" />Gerar recibo
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Nenhum pagamento registrado.</p>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
@@ -389,11 +612,7 @@ export default function TenantProfilePage() {
               <Label>Condomínio / Propriedade</Label>
               <Select value={editForm.property_id || ""} onValueChange={(v) => setEditForm({ ...editForm, property_id: v })}>
                 <SelectTrigger><SelectValue placeholder="Selecione o condomínio" /></SelectTrigger>
-                <SelectContent>
-                  {properties?.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name || p.address}</SelectItem>
-                  ))}
-                </SelectContent>
+                <SelectContent>{properties?.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name || p.address}</SelectItem>))}</SelectContent>
               </Select>
             </div>
             <div><Label>Casa</Label><Input value={editForm.house_number || ""} onChange={(e) => setEditForm({ ...editForm, house_number: e.target.value })} /></div>
@@ -406,10 +625,7 @@ export default function TenantProfilePage() {
               <div><Label>Entrada</Label><Input type="date" value={editForm.entry_date || ""} onChange={(e) => setEditForm({ ...editForm, entry_date: e.target.value })} /></div>
               <div><Label>Saída</Label><Input type="date" value={editForm.exit_date || ""} onChange={(e) => setEditForm({ ...editForm, exit_date: e.target.value })} /></div>
             </div>
-            <div>
-              <Label>Observações</Label>
-              <Textarea value={editForm.notes || ""} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} placeholder="Anotações importantes..." rows={3} />
-            </div>
+            <div><Label>Observações</Label><Textarea value={editForm.notes || ""} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} placeholder="Anotações importantes..." rows={3} /></div>
             <Button className="w-full rounded-xl" onClick={saveEdit} disabled={updateTenant.isPending}>Salvar</Button>
           </div>
         </DialogContent>
