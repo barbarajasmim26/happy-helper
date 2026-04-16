@@ -2,7 +2,7 @@ import { useTenants, useAllPayments, useUpsertPayment } from "@/hooks/use-tenant
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, MessageCircle, Check, Eye, TrendingUp, TrendingDown } from "lucide-react";
+import { AlertTriangle, MessageCircle, Eye, TrendingUp, TrendingDown, DollarSign } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { openWhatsApp, getMessageTemplates } from "@/lib/whatsapp";
@@ -13,28 +13,28 @@ export default function OverduePage() {
   const year = now.getFullYear();
   const { data: tenants } = useTenants("active");
   const { data: allPayments } = useAllPayments(year);
-  const upsertPayment = useUpsertPayment();
   const navigate = useNavigate();
 
-  // Determine payment pattern: check last 6 months
   const getPaymentPattern = (tenantId: string) => {
-    const recentPayments: boolean[] = [];
+    const recentPayments: string[] = [];
     for (let m = month - 1; m >= Math.max(1, month - 6); m--) {
-      const p = allPayments?.find((p) => p.tenant_id === tenantId && p.month === m);
-      recentPayments.push(p?.status === "paid");
+      const p = allPayments?.find((p: any) => p.tenant_id === tenantId && p.month === m);
+      if (p) recentPayments.push(p.status);
     }
-    const paidCount = recentPayments.filter(Boolean).length;
+    const paidOnTime = recentPayments.filter((s) => s === "paid").length;
+    const paidLate = recentPayments.filter((s) => s === "paid_late").length;
     const total = recentPayments.length;
     if (total === 0) return { label: "Novo", color: "secondary" as const, icon: null };
-    const ratio = paidCount / total;
-    if (ratio >= 0.8) return { label: "Paga e Mora", color: "warning" as const, icon: TrendingUp, description: "Costuma pagar, atraso pontual" };
-    if (ratio <= 0.3) return { label: "Mora e Paga", color: "destructive" as const, icon: TrendingDown, description: "Atrasos frequentes" };
+    const ratio = (paidOnTime + paidLate) / total;
+    if (ratio >= 0.8 && paidLate <= 1) return { label: "Bom pagador", color: "secondary" as const, icon: TrendingUp, description: "Atraso pontual" };
+    if (paidLate > paidOnTime) return { label: "Paga com atraso", color: "warning" as const, icon: TrendingDown, description: "Frequentemente atrasado" };
+    if (ratio <= 0.3) return { label: "Inadimplente", color: "destructive" as const, icon: AlertTriangle, description: "Atrasos frequentes" };
     return { label: "Irregular", color: "secondary" as const, icon: AlertTriangle, description: "Pagamento instável" };
   };
 
   const overdue = tenants?.filter((t) => {
-    const payment = allPayments?.find((p) => p.tenant_id === t.id && p.month === month);
-    if (payment?.status === "paid" || payment?.status === "deposit") return false;
+    const payment = allPayments?.find((p: any) => p.tenant_id === t.id && p.month === month);
+    if (payment?.status === "paid" || payment?.status === "paid_late" || payment?.status === "deposit") return false;
     return (t.payment_day || 10) < now.getDate();
   }) || [];
 
@@ -42,13 +42,6 @@ export default function OverduePage() {
     const fee = amount * (lateFee / 100);
     const int = amount * (interest / 100);
     return { fee, interest: int, total: amount + fee + int };
-  };
-
-  const markPaid = async (tenantId: string, amount: number) => {
-    try {
-      await upsertPayment.mutateAsync({ tenant_id: tenantId, month, year, status: "paid", amount, paid_at: now.toISOString().split("T")[0] });
-      toast.success("Marcado como pago!");
-    } catch (e: any) { toast.error(e.message); }
   };
 
   const sendOverdueWhatsApp = (t: any) => {
@@ -71,7 +64,10 @@ export default function OverduePage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <h1 className="text-2xl font-bold">Inquilinos em Atraso</h1>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Inadimplentes</h1>
+        <p className="text-sm text-muted-foreground">{MONTHS_PT[month - 1]}/{year}</p>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card className="border-l-4 border-l-destructive">
@@ -82,58 +78,63 @@ export default function OverduePage() {
         </Card>
         <Card className="border-l-4 border-l-warning">
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Receita Pendente</p>
+            <p className="text-sm text-muted-foreground">Receita Pendente (c/ multa)</p>
             <p className="text-2xl font-bold text-warning">R$ {pendingRevenue.toFixed(2)}</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-primary">
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Mês Referência</p>
-            <p className="text-2xl font-bold">{MONTHS_PT[month - 1]}/{year}</p>
+            <p className="text-sm text-muted-foreground">Total Ativos</p>
+            <p className="text-2xl font-bold">{tenants?.length || 0}</p>
           </CardContent>
         </Card>
       </div>
 
       {!overdue.length ? (
-        <Card><CardContent className="py-8 text-center text-muted-foreground">Nenhum inquilino em atraso! 🎉</CardContent></Card>
+        <Card><CardContent className="py-12 text-center">
+          <div className="text-4xl mb-3">🎉</div>
+          <p className="text-muted-foreground font-medium">Nenhum inquilino em atraso!</p>
+        </CardContent></Card>
       ) : (
         <div className="space-y-3">
           {overdue.map((t) => {
             const { fee, interest, total } = calcFees(Number(t.rent_amount));
             const pattern = getPaymentPattern(t.id);
             const PatternIcon = pattern.icon;
+            const daysLate = now.getDate() - (t.payment_day || 10);
             return (
-              <Card key={t.id} className="hover:shadow-md transition-shadow">
+              <Card key={t.id} className="hover:shadow-md transition-all">
                 <CardContent className="pt-4">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-semibold">{t.name}</p>
-                        <Badge variant={pattern.color === "warning" ? "outline" : pattern.color} className={`text-[10px] flex items-center gap-1 ${pattern.color === "warning" ? "bg-warning/10 text-warning border-warning/30" : ""}`}>
-                          {PatternIcon && <PatternIcon className="h-3 w-3" />}
-                          {pattern.label}
-                        </Badge>
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/10 text-destructive font-bold text-sm shrink-0">
+                        {t.name.charAt(0)}
                       </div>
-                      <p className="text-xs text-muted-foreground">{t.property?.address} - Casa {t.house_number}</p>
-                      {pattern.description && (
-                        <p className="text-xs text-muted-foreground mt-0.5 italic">{pattern.description}</p>
-                      )}
-                      <div className="flex gap-3 mt-2 text-xs flex-wrap">
-                        <span className="px-2 py-0.5 rounded bg-muted">Original: R$ {Number(t.rent_amount).toFixed(2)}</span>
-                        <span className="px-2 py-0.5 rounded bg-destructive/10 text-destructive">Multa (2%): R$ {fee.toFixed(2)}</span>
-                        <span className="px-2 py-0.5 rounded bg-destructive/10 text-destructive">Juros (1%): R$ {interest.toFixed(2)}</span>
-                        <Badge variant="destructive">Total: R$ {total.toFixed(2)}</Badge>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-sm">{t.name}</p>
+                          {PatternIcon && (
+                            <Badge variant={pattern.color === "warning" ? "outline" : pattern.color} className={`text-[10px] flex items-center gap-1 ${pattern.color === "warning" ? "bg-warning/10 text-warning border-warning/30" : ""}`}>
+                              <PatternIcon className="h-3 w-3" />{pattern.label}
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">{t.property?.address} - Casa {t.house_number}</p>
+                        <div className="flex gap-2 mt-2 text-xs flex-wrap">
+                          <Badge variant="destructive" className="text-[10px]">{daysLate} dias de atraso</Badge>
+                          <span className="px-2 py-0.5 rounded bg-muted text-[10px]">Original: R$ {Number(t.rent_amount).toFixed(2)}</span>
+                          <span className="px-2 py-0.5 rounded bg-destructive/10 text-destructive text-[10px]">+Multa: R$ {fee.toFixed(2)}</span>
+                          <span className="px-2 py-0.5 rounded bg-destructive/10 text-destructive text-[10px]">+Juros: R$ {interest.toFixed(2)}</span>
+                          <Badge variant="destructive" className="text-[10px]">Total: R$ {total.toFixed(2)}</Badge>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex gap-2">
-                      <Button size="sm" className="bg-success hover:bg-success/90 text-success-foreground" onClick={() => markPaid(t.id, total)}>
-                        <Check className="mr-1 h-3 w-3" />Pago
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => sendOverdueWhatsApp(t)}>
+                    <div className="flex gap-2 shrink-0">
+                      <Button size="sm" variant="outline" onClick={() => sendOverdueWhatsApp(t)} className="rounded-lg">
                         <MessageCircle className="mr-1 h-3 w-3" />Cobrar
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => navigate(`/tenants/${t.id}`)}>
-                        <Eye className="h-3 w-3" />
+                      <Button size="sm" variant="outline" onClick={() => navigate(`/tenants/${t.id}`)} className="rounded-lg">
+                        <Eye className="mr-1 h-3 w-3" />Perfil
                       </Button>
                     </div>
                   </div>
